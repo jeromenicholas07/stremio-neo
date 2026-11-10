@@ -30,6 +30,12 @@ New to Stremio? The [full setup guide](#full-setup-guide) walks through the acco
 
 Stremio normally shows a long list of streams and leaves you to guess. Neo picks for you and starts playing.
 
+<p>
+  <img src="screenshots/neo-autopick.jpg" alt="Auto-Pick banner: Playing #1, 1080p, RealDebrid (cached)" height="300">
+  &nbsp;
+  <img src="screenshots/neo-autopick-settings.jpg" alt="Auto-Pick settings with source and quality order" height="300">
+</p>
+
 - **Your order, your rules.** Drag sources (Real-Debrid cached, other debrid services, P2P) and qualities (4K HDR, 4K, 1080p, 720p) into the order you prefer, and switch off any you never want.
 - **Recovers on its own.** If a stream is dead, Neo goes back and plays the next best one.
 - **Skips blocked Real-Debrid files.** Real-Debrid sometimes serves a short error clip in place of a removed file. Neo recognises those and moves on before you see them.
@@ -45,6 +51,10 @@ Turn it on or off in **Settings → Modern UI → Playback → Auto-Pick Stream*
 - Hover a poster to preview its trailer, then mark it watched, rate it, add it to your watchlist, or hide it with **Not Interested**.
 - **My List** gathers Continue Watching, your library, watchlist and recommendations in one place.
 - The home screen appears instantly when you reopen the app, then refreshes in the background.
+
+![Hovering a poster shows a preview with quick actions](screenshots/neo-hover.jpg)
+
+![My List](screenshots/neo-mylist.jpg)
 
 ### Trakt built in
 
