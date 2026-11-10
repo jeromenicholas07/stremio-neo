@@ -169,7 +169,7 @@ That is the add-on side. In Stremio's **Add-ons** section, check that what you i
 Reorder or switch off sources and qualities in **Settings → Modern UI → Auto-Pick Stream**, or turn Auto-Pick off for that one show from its streams page.
 
 **I had the older "Stremio Custom UI" launcher.**
-Download `StremioNeo.exe` from this page and use it instead of the old file. Your login and settings carry over.
+It updates itself to Stremio Neo the next time it starts, and your login and settings carry over. If it opens a blank window instead, download `StremioNeo.exe` from this page and use that.
 
 **I want to start over.**
 Delete the folder `%LOCALAPPDATA%\StremioLauncherFULL` (paste that into the Explorer address bar). The next launch rebuilds it.
