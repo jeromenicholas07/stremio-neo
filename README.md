@@ -1,6 +1,8 @@
 # Stremio Neo
 
-**Stremio, with the stream picking done for you.** A free, unofficial interface that runs inside the Stremio app you already have. Same account, same add-ons.
+**Everything you want to watch, in one place. Press play and it just starts.**
+
+Stremio Neo is a free, unofficial upgrade for the Stremio app: a new look, trailers everywhere, and no more picking through stream lists. Same account, same add-ons.
 
 **[⬇ Download for Windows](https://github.com/jeromenicholas07/stremio-neo/releases/latest/download/StremioNeo.exe)** · [Mac](https://github.com/jeromenicholas07/stremio-neo/releases/latest/download/StremioNeo-mac.zip) · [iPhone / iPad](docs/GUIDE.md#iphone-and-ipad) · [Try in browser](https://jeromenicholas07.github.io/stremio-neo/#/)
 
@@ -10,8 +12,9 @@
 
 | | |
 |---|---|
+| ✨ **A new look** | A redesigned home with a big featured banner, scrolling rows, and a My List page for everything you're watching or saving. |
+| 🎞️ **Trailers everywhere** | Trailers play in the banner, and hovering any poster previews its trailer. Mark watched, rate or add to your watchlist right from the card. |
 | ▶️ **Auto-Pick** | Press play and the best stream starts. You set the source and quality order; dead or blocked streams are skipped, and the next episode plays by itself. |
-| 🎬 **Cinematic home** | Trailer banner, hover previews, one-click watched / rate / watchlist, and a My List page. |
 | 📋 **Trakt built in** | Watchlist, ratings and history sync, plus recommended and curated rows. |
 | 💬 **Self-syncing subtitles** | Subtitles are lined up to the audio automatically, on your own device. |
 | 🔊 **Fewer interruptions** | Audio returns after a Bluetooth reconnect. The home screen opens instantly. Updates itself. |
