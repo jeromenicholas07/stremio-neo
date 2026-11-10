@@ -32,7 +32,7 @@ in Safari.
 3. **Build with the Worker URL** so iOS uses it (desktop is unaffected):
    ```powershell
    $env:CORS_PROXY_URL = "https://stremio-ios-cors-proxy.<you>.workers.dev"
-   $env:PUBLIC_PATH = "/stremio-web-netflix/"
+   $env:PUBLIC_PATH = "/stremio-neo/"
    pnpm run build
    ```
    If you skip the Worker, Trakt may be flaky on iOS and preflight simply won't

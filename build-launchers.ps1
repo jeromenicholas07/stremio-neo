@@ -1,6 +1,6 @@
 # build-launchers.ps1
 # One-shot build script: compiles the web bundle with the correct GH Pages
-# public path, compiles StremioLauncher.exe + StremioLauncherFULL.exe, creates
+# public path, compiles StremioLauncher.exe + StremioNeo.exe, creates
 # the addon zip, and leaves everything in ./build/ (which gets pushed to
 # gh-pages).
 #
@@ -8,10 +8,10 @@
 #   powershell -ExecutionPolicy Bypass -File build-launchers.ps1
 #
 # --- IMPORTANT: publicPath gotcha ----------------------------------------
-# The web bundle MUST be built with PUBLIC_PATH=/stremio-web-netflix/.
+# The web bundle MUST be built with PUBLIC_PATH=/stremio-neo/.
 # Without it, webpack sets publicPath='/' and the deployed index.html will
 # reference `/<commit>/scripts/main.js`, which 404s on GitHub Pages because
-# the site is served under `/stremio-web-netflix/`, not root. Stremio shell
+# the site is served under `/stremio-neo/`, not root. Stremio shell
 # then loads a blank page and exits immediately. See BUILD.md section 1.
 #
 # Do NOT set PUBLIC_PATH from git-bash -- MSYS will mangle the leading slash
@@ -22,23 +22,23 @@ $ErrorActionPreference = "Stop"
 
 $SkipWebBuild = $args -contains "--skip-web"
 
-Write-Host "=== Building stremio-web-netflix ===" -ForegroundColor Cyan
+Write-Host "=== Building Stremio Neo ===" -ForegroundColor Cyan
 
 # 0. Build the web bundle (unless caller already did it)
 if (-not $SkipWebBuild) {
     Write-Host "`n[0/4] Building web bundle (pnpm build)..." -ForegroundColor Yellow
-    Write-Host "      PUBLIC_PATH=/stremio-web-netflix/"
-    $env:PUBLIC_PATH = '/stremio-web-netflix/'
+    Write-Host "      PUBLIC_PATH=/stremio-neo/"
+    $env:PUBLIC_PATH = '/stremio-neo/'
     & pnpm run build
     if ($LASTEXITCODE -ne 0) { throw "pnpm build failed" }
 
-    # Sanity check -- deployed index.html MUST reference /stremio-web-netflix/<hash>/...
+    # Sanity check -- deployed index.html MUST reference /stremio-neo/<hash>/...
     # If not, the deploy will 404 and the launcher will look broken.
     $indexHtml = Get-Content "build\index.html" -Raw
-    if ($indexHtml -notmatch '/stremio-web-netflix/[a-f0-9]{40}/scripts/main\.js') {
-        throw "build\index.html does NOT reference /stremio-web-netflix/<hash>/scripts/main.js -- PUBLIC_PATH was not applied. DO NOT DEPLOY."
+    if ($indexHtml -notmatch '/stremio-neo/[a-f0-9]{40}/scripts/main\.js') {
+        throw "build\index.html does NOT reference /stremio-neo/<hash>/scripts/main.js -- PUBLIC_PATH was not applied. DO NOT DEPLOY."
     }
-    Write-Host "  OK: index.html references /stremio-web-netflix/<hash>/..." -ForegroundColor Green
+    Write-Host "  OK: index.html references /stremio-neo/<hash>/..." -ForegroundColor Green
 } else {
     Write-Host "`n[0/4] Skipping web bundle build (--skip-web)" -ForegroundColor DarkGray
 }
@@ -74,17 +74,17 @@ Write-Host "`n[1/4] Compiling StremioLauncher.exe..." -ForegroundColor Yellow
 if ($LASTEXITCODE -ne 0) { throw "StremioLauncher.exe compilation failed" }
 Write-Host "  OK: build\StremioLauncher.exe"
 
-# 2. Compile StremioLauncherFULL.exe (bootstrapper)
-Write-Host "`n[2/4] Compiling StremioLauncherFULL.exe..." -ForegroundColor Yellow
+# 2. Compile StremioNeo.exe (bootstrapper)
+Write-Host "`n[2/4] Compiling StremioNeo.exe..." -ForegroundColor Yellow
 & $csc.FullName `
     /target:winexe `
     @iconArgs `
-    /out:build\StremioLauncherFULL.exe `
+    /out:build\StremioNeo.exe `
     /r:"$refDir\System.IO.Compression.dll" `
     /r:"$refDir\System.IO.Compression.FileSystem.dll" `
     StremioLauncherFULL.cs
-if ($LASTEXITCODE -ne 0) { throw "StremioLauncherFULL.exe compilation failed" }
-Write-Host "  OK: build\StremioLauncherFULL.exe"
+if ($LASTEXITCODE -ne 0) { throw "StremioNeo.exe compilation failed" }
+Write-Host "  OK: build\StremioNeo.exe"
 
 # 3. Zip the addon (source + production node_modules)
 Write-Host "`n[3/4] Packaging stremio-adult-addon.zip..." -ForegroundColor Yellow
@@ -121,5 +121,5 @@ Get-ChildItem build\*.exe, build\*.zip | ForEach-Object {
 }
 Write-Host "`nNext steps:"
 Write-Host "  1. Push the build/ folder to gh-pages"
-Write-Host "  2. Users download StremioLauncherFULL.exe from GH Pages"
+Write-Host "  2. Users download StremioNeo.exe from GH Pages"
 Write-Host "  3. First run downloads Prowlarr + Node automatically"

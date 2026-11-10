@@ -33,7 +33,7 @@ const MAX_ENTRIES = 50;
 // build / forcing every user to redownload the launcher exe. Format is the
 // same as pornstars.js: a JSON array of strings. Hosted alongside the web
 // UI on gh-pages.
-const REMOTE_PORNSTARS_URL = 'https://jeromenicholas07.github.io/stremio-web-netflix/pornstars.json';
+const REMOTE_PORNSTARS_URL = 'https://jeromenicholas07.github.io/stremio-neo/pornstars.json';
 const REMOTE_PORNSTARS_LS_KEY = 'incognito_remote_pornstars_v1';
 const REMOTE_PORNSTARS_TS_KEY = 'incognito_remote_pornstars_ts_v1';
 const REMOTE_PORNSTARS_TTL_MS = 24 * 60 * 60 * 1000; // 24h

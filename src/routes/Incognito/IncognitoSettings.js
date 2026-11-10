@@ -120,7 +120,7 @@ const IncognitoSettings = React.memo(({ onClose, onResetPin }) => {
                 if (cancelled) return;
                 setStatus({
                     ok: false,
-                    message: 'Cannot reach the bundled addon. Make sure you launched StremioLauncherFULL.exe.',
+                    message: 'Cannot reach the bundled addon. Make sure you launched StremioNeo.exe.',
                 });
             } finally {
                 if (!cancelled) setChecking(false);

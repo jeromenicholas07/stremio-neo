@@ -4,7 +4,7 @@
 //
 // The real state lives in a flag file next to the launcher's install
 // (%LOCALAPPDATA%\StremioLauncherFULL\incognito.flag) because it decides
-// whether StremioLauncherFULL.exe downloads and starts Prowlarr,
+// whether StremioNeo.exe downloads and starts Prowlarr,
 // FlareSolverr and the addon at all. The UI can't read that file, so the
 // Settings toggle mirrors it here and the nav reads the mirror.
 //

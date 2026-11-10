@@ -1,19 +1,20 @@
 #!/bin/bash
 # ============================================================
-#  Build & Deploy Script for Stremio Custom UI (GitHub Pages)
+#  Build & Deploy Script for Stremio Neo (GitHub Pages)
 # ============================================================
 #
 #  Usage:   ./deploy.sh [commit message]
+#           BUILD_ONLY=1 ./deploy.sh   (build everything, publish nothing)
 #  Example: ./deploy.sh "Fix subtitle sync"
 #
 #  IMPORTANT NOTES:
-#  1. PUBLIC_PATH must be /stremio-web-netflix/ (the repo name)
+#  1. PUBLIC_PATH must be /stremio-neo/ (the repo name)
 #     because GitHub Pages serves from:
-#     https://jeromenicholas07.github.io/stremio-web-netflix/
+#     https://jeromenicholas07.github.io/stremio-neo/
 #
 #  2. MSYS_NO_PATHCONV=1 is required on Git Bash (Windows)
-#     otherwise /stremio-web-netflix/ gets mangled to
-#     C:/Program Files/Git/stremio-web-netflix/
+#     otherwise /stremio-neo/ gets mangled to
+#     C:/Program Files/Git/stremio-neo/
 #
 #  3. The gh-pages branch needs a .nojekyll file so GitHub
 #     Pages serves all files (not just Jekyll-processed ones)
@@ -26,23 +27,36 @@
 #     MSYS_NO_PATHCONV=1 "C:/Windows/Microsoft.NET/Framework64/v4.0.30319/csc.exe" \
 #       /target:winexe /out:StremioLauncher.exe /platform:anycpu /optimize StremioLauncher.cs
 #     Then upload: gh release upload v1.0.0 StremioLauncher.exe --clobber \
-#       --repo jeromenicholas07/stremio-web-netflix
+#       --repo jeromenicholas07/stremio-neo
 # ============================================================
 
 set -e
 
-REPO="jeromenicholas07/stremio-web-netflix"
+REPO="jeromenicholas07/stremio-neo"
 REMOTE="fork"
-SOURCE_BRANCH="netflix-redesign"
-PUBLIC_PATH="/stremio-web-netflix/"
+SOURCE_BRANCH="main"
+PUBLIC_PATH="/stremio-neo/"
 # Free Cloudflare Worker CORS proxy (worker/). Enables Trakt sync + auto-pick
 # copyright preflight on iOS Safari. Public URL, safe to commit. Override by
 # exporting CORS_PROXY_URL before running this script.
 CORS_PROXY_URL="${CORS_PROXY_URL:-https://stremio-ios-cors-proxy.jeromenicholas07.workers.dev}"
 MSG="${1:-Deploy update}"
 
-echo "=== Step 1: Ensure we're on $SOURCE_BRANCH ==="
-git checkout "$SOURCE_BRANCH"
+echo "=== Step 1: Check branch and locate the gh-pages worktree ==="
+# No branch switching: the source tree and gh-pages live in separate
+# worktrees, so this script builds from whatever is checked out here and
+# publishes from the gh-pages worktree.
+CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
+if [ "$CURRENT_BRANCH" != "$SOURCE_BRANCH" ]; then
+    echo "WARN: building from '$CURRENT_BRANCH', not '$SOURCE_BRANCH'"
+fi
+PAGES_DIR=$(git worktree list --porcelain | awk '/^worktree /{p=substr($0,10)} /^branch refs\/heads\/gh-pages$/{print p}')
+if [ -z "$PAGES_DIR" ] || [ ! -d "$PAGES_DIR" ]; then
+    echo "ERROR: no gh-pages worktree. Create one with:"
+    echo "  git worktree add ../stremio-web-gh-pages gh-pages"
+    exit 1
+fi
+echo "gh-pages worktree: $PAGES_DIR"
 
 echo "=== Step 2: Install dependencies ==="
 pnpm install
@@ -73,7 +87,7 @@ rm -rf /tmp/stremio-deploy
 cp -r build /tmp/stremio-deploy
 
 echo "=== Step 5b: Compile launchers + extract version strings ==="
-# Build StremioLauncher.exe + StremioLauncherFULL.exe and read the version
+# Build StremioLauncher.exe + StremioNeo.exe and read the version
 # constants out of the .cs sources so we can write matching .version files
 # on gh-pages. The launchers self-update by polling these .version URLs.
 CSC="/c/Windows/Microsoft.NET/Framework64/v4.0.30319/csc.exe"
@@ -97,10 +111,10 @@ if [ -x "$CSC" ]; then
     MSYS_NO_PATHCONV=1 "$CSC" /target:winexe /optimize /nologo $ICON_FLAG \
         "/r:$DLL_DIR\\System.IO.Compression.dll" \
         "/r:$DLL_DIR\\System.IO.Compression.FileSystem.dll" \
-        /out:build/StremioLauncherFULL.exe StremioLauncherFULL.cs \
+        /out:build/StremioNeo.exe StremioLauncherFULL.cs \
         || { echo "ERROR: StremioLauncherFULL.cs failed to compile"; exit 1; }
     cp build/StremioLauncher.exe     /tmp/stremio-deploy/StremioLauncher.exe
-    cp build/StremioLauncherFULL.exe /tmp/stremio-deploy/StremioLauncherFULL.exe
+    cp build/StremioNeo.exe /tmp/stremio-deploy/StremioNeo.exe
     # Extract version constants — the launcher uses these strings to decide
     # whether to self-update. Must match exactly. Using sed (portable) instead
     # of grep -P which requires a UTF-8 locale that MSYS doesn't always have.
@@ -113,7 +127,7 @@ if [ -x "$CSC" ]; then
     fi
     echo "LAUNCHER_VERSION=$LAUNCHER_VER"
     echo "BASE_LAUNCHER_VERSION=$BASE_VER"
-    printf '%s' "$LAUNCHER_VER" > /tmp/stremio-deploy/StremioLauncherFULL.version
+    printf '%s' "$LAUNCHER_VER" > /tmp/stremio-deploy/StremioNeo.version
     printf '%s' "$BASE_VER"     > /tmp/stremio-deploy/StremioLauncher.version
     echo "OK: launchers compiled + .version files written"
 else
@@ -168,8 +182,14 @@ ZIP_SIZE=$(du -k build/stremio-adult-addon.zip | cut -f1)
 echo "OK: addon zipped (${ZIP_SIZE} KB)"
 echo "Saved build to /tmp/stremio-deploy"
 
-echo "=== Step 6: Switch to gh-pages and deploy ==="
-git checkout gh-pages
+if [ -n "$BUILD_ONLY" ]; then
+    echo "BUILD_ONLY set: stopping before publish. Output is in /tmp/stremio-deploy"
+    exit 0
+fi
+
+echo "=== Step 6: Copy the build into the gh-pages worktree ==="
+cd "$PAGES_DIR"
+git pull --ff-only "$REMOTE" gh-pages
 
 # Keep the most recent previous hash dir so users on cached pages from the
 # previous deploy can still load their worker scripts (old service workers
@@ -221,12 +241,11 @@ git commit -m "$MSG
 Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>"
 git push "$REMOTE" gh-pages
 
-echo "=== Step 8: Switch back to $SOURCE_BRANCH ==="
-git checkout "$SOURCE_BRANCH"
+cd - > /dev/null
 
 echo ""
 echo "=== DEPLOYED ==="
-echo "URL: https://jeromenicholas07.github.io/stremio-web-netflix/"
+echo "URL: https://jeromenicholas07.github.io/stremio-neo/"
 echo "Build hash: $HASH"
 echo ""
 echo "Allow 1-2 minutes for GitHub Pages to update."

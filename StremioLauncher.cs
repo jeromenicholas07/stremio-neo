@@ -159,7 +159,7 @@ class StremioLauncher
         // minutes after every deploy (the service worker often does not control
         // navigations inside the Stremio shell webview).
         const string WEB_UI_CACHE_VERSION = "2026-09-13-probe-ipv4";
-        string webuiUrl = "https://jeromenicholas07.github.io/stremio-web-netflix/?v="
+        string webuiUrl = "https://jeromenicholas07.github.io/stremio-neo/?v="
             + Uri.EscapeDataString(WEB_UI_CACHE_VERSION)
             + "#/?streamingServerUrl=" + Uri.EscapeDataString("http://127.0.0.1:12470/");
         Console.WriteLine("[OK] Launching Stremio...");

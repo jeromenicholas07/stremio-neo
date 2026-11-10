@@ -145,7 +145,7 @@ async function resolveHashFromUrl({ downloadUrl, magnetUrl, indexer }) {
             }
             return {
                 error: 'addon_outdated',
-                message: 'Incognito addon is out of date — quit the launcher (right-click tray icon → Exit), restart it, and the addon will auto-update. If this keeps happening, download the latest StremioLauncherFULL.exe from the project page.',
+                message: 'Incognito addon is out of date — quit the launcher (right-click tray icon → Exit), restart it, and the addon will auto-update. If this keeps happening, download the latest StremioNeo.exe from the project page.',
             };
         }
         return {

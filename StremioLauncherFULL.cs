@@ -43,7 +43,7 @@ class StremioLauncherFULL
     // with the freshly-downloaded exe and relaunches. Bump this whenever you
     // ship a new StremioLauncherFULL.exe — and update the same value in the
     // version file deployed to gh-pages (the deploy script handles this).
-    const string LAUNCHER_VERSION = "2026-09-13-probe-ipv4";
+    const string LAUNCHER_VERSION = "2026-11-10-stremio-neo";
 
     // Bump BASE_LAUNCHER_VERSION whenever StremioLauncher.exe changes. We
     // write this string into <rootDir>\StremioLauncher.version on a fresh
@@ -51,7 +51,7 @@ class StremioLauncherFULL
     // on disk differs we re-download just the base launcher. This is the
     // same pattern as ADDON_VERSION below — small targeted update, no
     // full re-install.
-    const string BASE_LAUNCHER_VERSION = "2026-09-13-probe-ipv4";
+    const string BASE_LAUNCHER_VERSION = "2026-11-10-stremio-neo";
 
     // Bump ADDON_VERSION on every addon code change. The launcher checks
     // <rootDir>\stremio-adult-addon\.addon-version against this on every
@@ -73,12 +73,12 @@ class StremioLauncherFULL
     // challenges (most adult indexers do) work from a cold start.
     const string FLARESOLVERR_URL = "https://github.com/FlareSolverr/FlareSolverr/releases/download/v3.3.21/flaresolverr_windows_x64.zip";
     // Addon zip hosted on GitHub Pages alongside the web UI
-    const string ADDON_URL = "https://jeromenicholas07.github.io/stremio-web-netflix/stremio-adult-addon.zip";
+    const string ADDON_URL = "https://jeromenicholas07.github.io/stremio-neo/stremio-adult-addon.zip";
     // Base launcher (also on Pages)
-    const string BASE_LAUNCHER_URL = "https://jeromenicholas07.github.io/stremio-web-netflix/StremioLauncher.exe";
+    const string BASE_LAUNCHER_URL = "https://jeromenicholas07.github.io/stremio-neo/StremioLauncher.exe";
     // Self-update endpoints
-    const string LAUNCHER_VERSION_URL = "https://jeromenicholas07.github.io/stremio-web-netflix/StremioLauncherFULL.version";
-    const string LAUNCHER_EXE_URL = "https://jeromenicholas07.github.io/stremio-web-netflix/StremioLauncherFULL.exe";
+    const string LAUNCHER_VERSION_URL = "https://jeromenicholas07.github.io/stremio-neo/StremioNeo.version";
+    const string LAUNCHER_EXE_URL = "https://jeromenicholas07.github.io/stremio-neo/StremioNeo.exe";
 
     const int PROWLARR_PORT = 9696;
     const int ADDON_PORT = 7000;
@@ -193,7 +193,7 @@ class StremioLauncherFULL
         // must not change halfway through a launch.
         bool incognito = IncognitoEnabled();
 
-        Console.WriteLine("=== StremioLauncherFULL " + LAUNCHER_VERSION + " (payload " + PAYLOAD_VERSION + ") ===");
+        Console.WriteLine("=== Stremio Neo launcher " + LAUNCHER_VERSION + " (payload " + PAYLOAD_VERSION + ") ===");
         Console.WriteLine("Install root: " + rootDir);
         Console.WriteLine("Shared data:  " + sharedDir);
         Console.WriteLine("Incognito:    " + (incognito ? "on" : "off (default)"));
@@ -618,7 +618,7 @@ class StremioLauncherFULL
                 return false;
             }
 
-            Console.WriteLine("[update] StremioLauncherFULL update available: "
+            Console.WriteLine("[update] Stremio Neo update available: "
                 + LAUNCHER_VERSION + " -> " + remote);
 
             string tempExe = currentExe + ".update";
@@ -956,7 +956,7 @@ class StremioLauncherFULL
     /// on the next launch.
     ///
     /// "Stremio.lnk" is the name the Stremio installer itself owns and will
-    /// keep reclaiming; "Stremio Custom.lnk" is a name it never writes, so it
+    /// keep reclaiming; "Stremio Neo.lnk" is a name it never writes, so it
     /// stays correct no matter what and is the safe one to pin.
     /// </summary>
     static void EnsureShortcuts()
@@ -977,7 +977,9 @@ class StremioLauncherFULL
         // created if missing. The Startup entry is only ever repaired — we
         // don't add the app to autostart on someone's behalf.
         WriteShortcut(Path.Combine(programs, "Stremio.lnk"), exe, false);
-        WriteShortcut(Path.Combine(programs, "Stremio Custom.lnk"), exe, false);
+        WriteShortcut(Path.Combine(programs, "Stremio Neo.lnk"), exe, false);
+        // Pre-rename installs created this alias; "Stremio Neo" replaces it.
+        try { File.Delete(Path.Combine(programs, "Stremio Custom.lnk")); } catch { }
         WriteShortcut(Path.Combine(programs, "Startup", "Stremio.lnk"), exe, true);
     }
 
@@ -1021,7 +1023,7 @@ class StremioLauncherFULL
             lnkType.InvokeMember("IconLocation", BindingFlags.SetProperty, null, lnk,
                 new object[] { targetExe + ",0" });
             lnkType.InvokeMember("Description", BindingFlags.SetProperty, null, lnk,
-                new object[] { "Stremio (custom launcher)" });
+                new object[] { "Stremio Neo" });
             lnkType.InvokeMember("Save", BindingFlags.InvokeMethod, null, lnk, null);
 
             Console.WriteLine("[shortcut] " + (exists ? "repaired " : "created ")

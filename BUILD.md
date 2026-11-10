@@ -16,7 +16,7 @@ the env var below and will refuse to continue if the output looks wrong.
 
 ## §1. The `publicPath` gotcha (the one that keeps biting us)
 
-**Symptom**: user runs `StremioLauncherFULL.exe`, everything logs "[OK]",
+**Symptom**: user runs `StremioNeo.exe`, everything logs "[OK]",
 Stremio shell launches, Stremio window opens blank, shell exits with code 0
 a second later, launcher terminal closes.
 
@@ -28,26 +28,26 @@ generated `build/index.html` references
 
 which resolves to `https://jeromenicholas07.github.io/<commit-hash>/...`
 on GitHub Pages — **404**, because the site is served under
-`/stremio-web-netflix/`, not the domain root. The webview loads a blank
+`/stremio-neo/`, not the domain root. The webview loads a blank
 page, Stremio shell exits, and the user sees nothing.
 
 **Fix**: always build with
 
-    PUBLIC_PATH=/stremio-web-netflix/
+    PUBLIC_PATH=/stremio-neo/
 
 `build-launchers.ps1` sets this, invokes `pnpm run build`, and then
 grep-asserts that `build/index.html` contains
-`/stremio-web-netflix/<hash>/scripts/main.js`. The script **throws** if
+`/stremio-neo/<hash>/scripts/main.js`. The script **throws** if
 that assertion fails, so the broken bundle can never be packaged.
 
 ### Do NOT set `PUBLIC_PATH` from git-bash
 
 MSYS translates leading slashes into Windows paths:
 
-    PUBLIC_PATH=/stremio-web-netflix/ pnpm build
-    # webpack receives PUBLIC_PATH=C:/Program Files/Git/stremio-web-netflix/
+    PUBLIC_PATH=/stremio-neo/ pnpm build
+    # webpack receives PUBLIC_PATH=C:/Program Files/Git/stremio-neo/
 
-Always use PowerShell (`$env:PUBLIC_PATH = '/stremio-web-netflix/'`) or
+Always use PowerShell (`$env:PUBLIC_PATH = '/stremio-neo/'`) or
 the one-shot `build-launchers.ps1`.
 
 ---
@@ -88,11 +88,11 @@ install path is `%LOCALAPPDATA%\StremioLauncherFULL\<version>\`.
 6. `git push fork gh-pages` (remote named `fork` is the personal one)
 7. Verify after ~30–60s:
    ```bash
-   curl -s https://jeromenicholas07.github.io/stremio-web-netflix/ \
+   curl -s https://jeromenicholas07.github.io/stremio-neo/ \
      | grep -oE 'src="[^"]*main.js"'
    ```
    must print something matching
-   `src="/stremio-web-netflix/<hash>/scripts/main.js"`.
+   `src="/stremio-neo/<hash>/scripts/main.js"`.
 
 ---
 

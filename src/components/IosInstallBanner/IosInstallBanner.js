@@ -51,7 +51,7 @@ const IosInstallBanner = ({ className }) => {
         <div className={classnames(className, styles['ios-install-banner'])}>
             <Icon className={styles['share-icon']} name={'share'} />
             <div className={styles['text']}>
-                <div className={styles['title']}>{'Add Stremio to your Home Screen'}</div>
+                <div className={styles['title']}>{'Add Stremio Neo to your Home Screen'}</div>
                 <div className={styles['subtitle']}>{'Tap the Share button, then “Add to Home Screen” for a full-screen app.'}</div>
             </div>
             <Button

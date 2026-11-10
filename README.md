@@ -1,284 +1,199 @@
-# Stremio Custom UI — Netflix Redesign + Whisper Auto-Sync
+# Stremio Neo
 
-A custom Stremio Web UI with a Netflix-style redesign and AI-powered automatic subtitle synchronization.
+**Stremio, with the stream picking done for you.** Press play and the best stream starts. Browse a cinematic home screen with trailers. Subtitles line themselves up. Your Trakt watchlist and ratings are built in.
 
-**🌐 Live demo:** [jeromenicholas07.github.io/stremio-web-netflix](https://jeromenicholas07.github.io/stremio-web-netflix/#/)
-*(Open in any browser to preview the UI. For full streaming + auto-sync, follow the Setup Guide below to run it inside the Stremio shell.)*
+Stremio Neo is a free, unofficial interface that runs inside the Stremio app you already have. Same account, same add-ons, same library.
 
-![Home](screenshots/home.png)
+**[⬇ Download for Windows](https://github.com/jeromenicholas07/stremio-neo/releases/latest/download/StremioNeo.exe)** · [Mac](#mac) · [iPhone and iPad](#iphone-and-ipad) · [Try it in your browser](https://jeromenicholas07.github.io/stremio-neo/#/)
 
-## Features
+![Stremio Neo home screen](screenshots/neo-home.jpg)
 
-- **Netflix-style UI** — clean, modern interface with hero banners, continue watching, and watchlist rows
-- **Whisper Auto-Sync** — automatically syncs external subtitles using OpenAI's Whisper model running locally in your browser (WASM/WebGPU)
-- **Trakt Integration** — watchlist, ratings, scrobbling, and personalized recommendations
-- **GPU Acceleration** — uses WebGPU when available for fast transcription, falls back to WASM
-- **Zero Setup** — download one file, double-click, done
-- **Works on iPhone** — add it to your Home Screen from Safari, no App Store needed
+> Stremio Neo is a community project. It is not made by, affiliated with, or endorsed by Stremio.
 
-![Subtitles Auto-Sync](screenshots/subtitles.png)
+## Get started
 
-## Setup Guide
+You need a Stremio account with your add-ons already set up. If you use Stremio today, you have that.
 
-Everything below takes about ten minutes, most of which is waiting for a
-download. You don't need to be technical, and you don't need to install
-anything beyond Stremio itself.
+1. **Install Stremio** from [stremio.com/downloads](https://www.stremio.com/downloads) if you don't have it, and sign in once.
+2. **Download [`StremioNeo.exe`](https://github.com/jeromenicholas07/stremio-neo/releases/latest/download/StremioNeo.exe)** and save it somewhere permanent, such as your Documents folder.
+3. **Double-click it.** Stremio opens with the Neo interface.
 
-Start here even if you mainly want it on your iPhone. **Steps 1–3 have to be
-done on a computer**, and the iPhone instructions further down pick up from
-there.
+Windows shows a blue "Windows protected your PC" box the first time, because the file isn't code-signed. Click **More info**, then **Run anyway**.
+
+After the first run there is a **Stremio Neo** entry in your Start Menu. Neo updates itself each time it starts, so there is nothing to download again.
+
+New to Stremio? The [full setup guide](#full-setup-guide) walks through the account and add-ons too.
+
+## What you get
+
+### Auto-Pick: press play, skip the stream list
+
+Stremio normally shows a long list of streams and leaves you to guess. Neo picks for you and starts playing.
+
+- **Your order, your rules.** Drag sources (Real-Debrid cached, other debrid services, P2P) and qualities (4K HDR, 4K, 1080p, 720p) into the order you prefer, and switch off any you never want.
+- **Recovers on its own.** If a stream is dead, Neo goes back and plays the next best one.
+- **Skips blocked Real-Debrid files.** Real-Debrid sometimes serves a short error clip in place of a removed file. Neo recognises those and moves on before you see them.
+- **Next episode just plays.** When an episode ends, Neo picks a fresh stream for the next one.
+- **Picks up where you were.** Resuming a show reuses the stream you were already watching.
+- **Per-show settings.** Keep the global order, or set a different one for a single show.
+
+Turn it on or off in **Settings → Modern UI → Playback → Auto-Pick Stream**. The stream list is still there whenever you want to choose by hand.
+
+### A home screen built for browsing
+
+- A hero banner that plays trailers for what's new and popular.
+- Hover a poster to preview its trailer, then mark it watched, rate it, add it to your watchlist, or hide it with **Not Interested**.
+- **My List** gathers Continue Watching, your library, watchlist and recommendations in one place.
+- The home screen appears instantly when you reopen the app, then refreshes in the background.
+
+### Trakt built in
+
+Connect your own [Trakt](https://trakt.tv) account under **Settings → Modern UI → Connect to Trakt**.
+
+- Watchlist, ratings and watch history sync both ways, and what you watch is scrobbled as you go.
+- Home rows from Trakt: recommendations for you, Trending, Popular, Anticipated, Box Office.
+- Curated lists: IMDb Top 250, Letterboxd Top 250, Oscar Best Picture winners, A24, Studio Ghibli, the MCU.
+- You stay signed in to Trakt even after reinstalling Stremio.
+
+### Subtitles that sync themselves
+
+Pick a subtitle from an add-on and Neo listens to a few seconds of the audio, works out how far off the subtitle is, and corrects the delay. It runs on your own computer using the Whisper speech model; no audio leaves your machine. The model (about 75 MB) downloads once, the first time you use it.
+
+![Subtitles synced automatically](screenshots/subtitles.png)
+
+### Small things that add up
+
+- **Audio comes back after a Bluetooth drop.** If your headphones or speaker disconnect and reconnect mid-film, sound returns without restarting the stream.
+- **One file, always current.** The launcher updates itself and the interface on every start, and installs Stremio's own updates when they are ready.
+- **Trailers in your language**, from a choice of 12.
+
+### Optional extras
+
+Off by default, under **Settings → Modern UI**: torrent search results in Search, and a PIN-locked private section. Both are Windows only and download extra components when switched on.
+
+## Platforms
+
+| | What works | How to get it |
+|---|---|---|
+| **Windows** | Everything | [`StremioNeo.exe`](https://github.com/jeromenicholas07/stremio-neo/releases/latest/download/StremioNeo.exe) |
+| **iPhone / iPad** | The interface, Auto-Pick, Trakt. Streams must come from a debrid service; P2P can't play on iOS. Some formats hand off to Infuse or VLC. | Add to Home Screen from Safari, see [below](#iphone-and-ipad) |
+| **Mac** | The interface, Auto-Pick and Trakt. No automatic subtitle speed-up, blocked-file check, or optional extras yet. | [`StremioNeo-mac.zip`](https://github.com/jeromenicholas07/stremio-neo/releases/latest/download/StremioNeo-mac.zip), see [below](#mac) |
+
+## Full setup guide
+
+About ten minutes, most of it waiting for downloads. Steps 1 to 3 must be done on a computer, even if you mainly want Neo on your iPhone.
 
 ### 1. Install Stremio
 
-Go to [stremio.com/downloads](https://www.stremio.com/downloads) and download
-Stremio for your computer. Open the file you downloaded and follow the
-installer. This is the official app from Stremio — the custom UI runs inside it.
+Download Stremio from [stremio.com/downloads](https://www.stremio.com/downloads) and run the installer. This is the official app; Neo runs inside it.
 
 ### 2. Create a Stremio account
 
-Open Stremio. On the welcome screen choose **Sign up** and register with an
-email address, or **Log in** if you already have an account.
+Open Stremio and choose **Sign up**, or **Log in** if you have an account. Your account stores your library, add-ons and settings, and Neo reads them from there.
 
-You need an account: it's what stores your library and settings, and the custom
-UI reads them from there.
+### 3. Add your add-ons
 
-### 3. Add a source add-on
+Stremio on its own has nothing to play. **Add-ons** provide the content, and you choose which ones to trust.
 
-> **⚠️ Do this on a computer — it cannot be done from an iPhone or iPad.**
-> Add-on installation and configuration is unreliable in mobile Safari, and
-> some add-ons send you to their own website to enter a key, which doesn't
-> come back cleanly on iOS. Set them up once on a computer and they follow you
-> everywhere (see below).
+1. Click **Add-ons** in Stremio.
+2. Install the ones you want.
+3. If an add-on has settings, such as a key for a service you pay for, click **Configure** and fill them in.
 
-Stremio on its own is a media centre with no content. **Add-ons** are what give
-it something to play, and you choose which ones to trust.
+Add-ons are stored on your account, so you only do this once. Sign in on another device and they are already there. Adding add-ons from an iPhone is unreliable; use a computer.
 
-1. Click **Add-ons** in the left sidebar.
-2. Browse the catalogue and install the ones you want.
-3. If an add-on offers settings — an account or API key for a service you pay
-   for, for example — click **Configure** and fill them in.
+### 4. Run Stremio Neo
 
-Which add-ons to use is your decision, and it's worth knowing what each one
-does before you install it. The custom UI works with whatever you pick.
-
-**Your add-ons live on your Stremio account, not on the computer.** That's why
-this step only has to happen once: sign in on any other device — including your
-iPhone — and the same add-ons are already there. Whenever you want to add or
-reconfigure one later, go back to a computer to do it.
-
-### 4. Download the launcher
-
-> Only want this on your iPhone? You're done with the computer — skip to
-> [Setting it up on an iPhone or iPad](#setting-it-up-on-an-iphone-or-ipad).
-> Steps 4–8 are for watching on the computer itself.
-
-Go to the [latest release](https://github.com/jeromenicholas07/stremio-web-netflix/releases/latest)
-and download:
-
-| Your computer | File to download | How to open it |
-|---|---|---|
-| Windows | `StremioLauncherFULL.exe` | Double-click |
-| macOS | `launch-stremio.command` | Right-click → **Open** the first time, then double-click |
-
-Put it somewhere you'll find again — your Desktop is fine. This one file is the
-whole thing; there's nothing to install.
-
-### 5. Get past the Windows warning (Windows only, first time)
-
-The first time you open the launcher, Windows will show a blue box saying
-**"Windows protected your PC"**.
-
-This is expected. It appears for any program that hasn't been through Microsoft's
-paid code-signing process, which this one hasn't. To continue:
-
-1. Click **More info** — it's small text in the middle of the blue box, easy to miss.
-2. A **Run anyway** button appears at the bottom. Click it.
-
-You'll only have to do this once. If you'd rather not, that's a completely
-reasonable place to stop.
-
-### 6. Launch
-
-Double-click the launcher. It opens Stremio with the custom UI.
-
-The very first launch takes a moment while it sets itself up; after that it
-opens straight away. Leave the launcher running while you watch — closing it
-closes Stremio too.
-
-### 7. Connect your Trakt account (optional)
-
-[Trakt](https://trakt.tv) tracks what you've watched and syncs your watchlist
-and ratings. The custom UI uses it for personalised rows on the home screen.
-Skip this if you don't want it — everything else works without it.
-
-You'll be signing in to **your own** Trakt account. Nothing is shared with
-whoever gave you this app, and you can disconnect whenever you like.
-
-1. Create a free account at [trakt.tv](https://trakt.tv) if you don't have one.
-2. In the custom UI, open **Settings** (the person icon, top right) and click
-   **Modern UI** in the list on the left.
-3. Under **Trakt Integration**, click **Connect to Trakt**.
-4. A short code appears, and a browser tab opens at trakt.tv/activate. Click the
-   code to copy it, paste it into that page, and approve.
-5. Back in Settings, click **Sync Now** to pull in your watchlist and ratings.
-
-You can ignore the **Advanced** row underneath — those fields are already filled
-in and you don't need to touch them.
-
-![Settings](screenshots/settings.png)
-
-### 8. Set your preferences (optional)
-
-Still in **Settings → Modern UI**:
-
-- **TMDB API Key** — already filled in and working. Leave it alone unless you
-  have your own.
-- **Trailer Language** — which language trailers should be in.
-- **Auto-Pick Stream** — plays the best available stream automatically instead
-  of showing you a list. Drag the **Sources** and **Quality** rows into the
-  order you prefer, and switch off any you never want.
-
-## Setting it up on an iPhone or iPad
-
-There's no app to install from the App Store. The UI runs as a web app you add
-to your Home Screen, and it looks and behaves like a normal app once it's there.
-
-**Before you start**, you must have done **steps 1–3 above on a computer** —
-created your Stremio account and installed your add-ons. Add-ons cannot be added
-from an iPhone. They're stored on your account, so once they're set up on a
-computer they appear on your phone automatically.
-
-### 1. Add it to your Home Screen
-
-1. Open **Safari** on your iPhone. It has to be Safari — Chrome and Firefox on
-   iOS can't add web apps to the Home Screen.
-2. Go to
-   [jeromenicholas07.github.io/stremio-web-netflix](https://jeromenicholas07.github.io/stremio-web-netflix/#/)
-3. Tap the **Share** button (the square with an arrow pointing up, at the bottom
-   of the screen).
-4. Scroll down the list and tap **Add to Home Screen**, then **Add** in the top
-   right.
-5. Close Safari and open the new icon from your Home Screen — it's called
-   **Stremio**. It fills the whole screen, with no address bar.
-
-Always open it from that Home Screen icon. Opening the address in Safari again
-works, but you get the browser chrome and it feels like a website.
-
-### 2. Sign in
-
-Tap the person icon in the top right, then **Log in**, and use the same Stremio
-account you created on the computer. Your add-ons, library and watch history are
-already there.
-
-### 3. Leave the streaming server alone
-
-Go to **Settings → Streaming** and leave the server URL empty. iPhones can't run
-the streaming server, and the app doesn't need it — playback comes straight from
-your add-on over the internet.
-
-This is also why **peer-to-peer streams don't work on iPhone**. You need an
-add-on backed by a service that streams over HTTPS, such as Real-Debrid. Auto-pick
-already knows this and prefers streams your iPhone can actually play.
-
-### 4. Install a video player app (recommended)
-
-Install **[Infuse](https://apps.apple.com/app/infuse-7/id1136220934)** or **VLC**
-from the App Store. Most things play directly in the app, but Safari can't handle
-certain formats (MKV, HEVC, AC3, 4K HDR). When that happens the player shows a
-row of buttons — tap Infuse or VLC and it plays there, then come back.
+Follow [Get started](#get-started) above. Keep the launcher running while you watch; closing it closes Stremio.
 
 ### 5. Connect Trakt (optional)
 
-Same as on a computer: **Settings → Modern UI → Connect to Trakt**. This links
-your own Trakt account.
+1. Create a free account at [trakt.tv](https://trakt.tv).
+2. In Neo, open **Settings** (the person icon, top right) and choose **Modern UI**.
+3. Under **Trakt Integration**, click **Connect to Trakt**.
+4. A short code appears and trakt.tv/activate opens. Paste the code there and approve.
+5. Click **Sync Now** to pull in your watchlist and ratings.
 
-### Updating on iPhone
+### 6. Set your preferences (optional)
 
-The app updates itself when you open it, so normally there's nothing to do. If
-it seems stuck on an old version, remove the Home Screen icon (press and hold →
-**Remove App** → **Delete from Home Screen**) and add it again with the steps
-above. Nothing is lost — everything is on your Stremio account.
+Still in **Settings → Modern UI**:
+
+- **Auto-Pick Stream**: drag Sources and Quality into your preferred order.
+- **Trailer Language**: the language trailers play in.
+- **TMDB API Key** and the Trakt **Advanced** fields are already filled in. Leave them unless you have your own keys.
+
+## Mac
+
+1. Install Stremio from [stremio.com/downloads](https://www.stremio.com/downloads) into Applications and sign in once.
+2. Download [`StremioNeo-mac.zip`](https://github.com/jeromenicholas07/stremio-neo/releases/latest/download/StremioNeo-mac.zip) and unzip it.
+3. Right-click **Stremio Neo** and choose **Open**, then **Open** again. macOS asks because the app isn't notarised; you only do this once.
+
+The Mac build opens Stremio with the Neo interface. It doesn't yet include the helper services the Windows launcher runs, so the features listed in the [platform table](#platforms) are Windows only for now. The Mac build is new and has had little testing; please [open an issue](https://github.com/jeromenicholas07/stremio-neo/issues) if it doesn't start.
+
+## iPhone and iPad
+
+There is nothing to install from the App Store. Neo runs as a web app on your Home Screen.
+
+**First, on a computer:** create your Stremio account and add your add-ons (steps 1 to 3 above).
+
+1. Open **Safari** and go to [jeromenicholas07.github.io/stremio-neo](https://jeromenicholas07.github.io/stremio-neo/#/). It has to be Safari.
+2. Tap **Share**, then **Add to Home Screen**, then **Add**.
+3. Open **Stremio Neo** from your Home Screen and log in with your Stremio account.
+4. Leave **Settings → Streaming** server URL empty. iPhones can't run the streaming server and don't need it.
+5. Install [Infuse](https://apps.apple.com/app/infuse-7/id1136220934) or VLC. Safari can't play some formats (MKV, HEVC, AC3, 4K HDR); when that happens the player offers a button to open the stream in one of those apps.
+
+Peer-to-peer streams don't work on iPhone. You need an add-on backed by a service that streams over HTTPS, such as Real-Debrid. Auto-Pick already prefers streams your iPhone can play.
+
+The web app updates itself when opened. If it seems stuck on an old version, remove the Home Screen icon and add it again; nothing is lost.
+
+More detail: [docs/IOS.md](docs/IOS.md).
+
+## Privacy
+
+- Neo talks to the same services Stremio does, plus Trakt and TMDB if you use those features.
+- Page views are counted anonymously with [GoatCounter](https://www.goatcounter.com), which uses no cookies and stores no personal data.
+- Trakt and TMDB app keys are included so things work out of the box. They are shared by everyone using Neo; you can enter your own in **Settings → Modern UI**. Connecting Trakt signs in to your own account, and nothing is shared with anyone else.
+- Subtitle sync runs entirely on your device.
 
 ## If something goes wrong
 
 **Stremio opens but the window is blank.**
-Close everything, wait a few seconds, and run the launcher again. If it's still
-blank, your internet connection may have dropped mid-load — the UI is fetched
-from the web on each start.
+Close everything, wait a few seconds, and run Stremio Neo again. The interface loads from the web on each start, so check your connection.
 
-**"Port already in use", or the launcher closes immediately.**
-An old copy is probably still running. Open Task Manager (Ctrl+Shift+Esc), end
-any `Stremio` or `StremioLauncher` tasks, then try again.
+**The launcher closes immediately, or says a port is in use.**
+An old copy is still running. Open Task Manager (Ctrl+Shift+Esc), end any `Stremio` or `StremioLauncher` tasks, and try again.
 
 **Nothing plays.**
-That's the add-on side, not the UI. Check in Stremio's own **Add-ons** section
-that what you installed is still working and still configured.
+That is the add-on side. In Stremio's **Add-ons** section, check that what you installed is still working and configured.
+
+**Auto-Pick chose a stream I didn't want.**
+Reorder or switch off sources and qualities in **Settings → Modern UI → Auto-Pick Stream**, or turn Auto-Pick off for that one show from its streams page.
+
+**I had the older "Stremio Custom UI" launcher.**
+It updates itself to Stremio Neo the next time it starts. Your login and settings carry over.
 
 **I want to start over.**
-Delete the folder `%LOCALAPPDATA%\StremioLauncherFULL` — paste that into the
-Windows Explorer address bar to find it. The next launch rebuilds it from
-scratch. To reset just your custom-UI preferences, use **Settings → Modern UI**
-and clear the fields you changed.
+Delete the folder `%LOCALAPPDATA%\StremioLauncherFULL` (paste that into the Explorer address bar). The next launch rebuilds it.
 
-**I want to remove it completely.**
-Delete the folder above, delete the launcher file, and uninstall Stremio the
-normal way through Windows Settings → Apps.
+**I want to remove it.**
+Delete that folder and `StremioNeo.exe`, and remove the **Stremio Neo** Start Menu entry. Stremio itself is untouched and opens normally from its own shortcut.
 
-### On iPhone
+**On iPhone: no "Add to Home Screen".**
+You're not in Safari. Chrome and Firefox on iOS don't offer it.
 
-**I can't find "Add to Home Screen".**
-You're not in Safari. Chrome and Firefox on iOS don't offer it — open the address
-in Safari instead. If you are in Safari, scroll further down the share sheet; it
-sits below the row of app icons.
-
-**There's nothing to watch — no sources appear.**
-Your add-ons aren't set up yet, or you're signed into a different account. Add-ons
-can only be added on a computer (step 3 above). Do that, then check under the
-person icon that your iPhone is signed into the same Stremio account.
-
-**A stream won't play, or plays sound with no picture.**
+**On iPhone: a stream won't play, or has sound but no picture.**
 Safari can't decode that file. Tap the **Infuse** or **VLC** button in the player.
-If you don't see those buttons, install one of those apps first.
 
-**Everything fails to play.**
-Peer-to-peer streams can't work on an iPhone. You need an add-on backed by a
-service that streams over HTTPS, such as Real-Debrid, configured on a computer.
+## For developers
 
-**It says "A problem repeatedly occurred".**
-The page ran out of memory, which happens on older iPhones. Close the app fully
-(swipe up from the bottom and swipe it away) and reopen it.
-
-## How Auto-Sync Works
-
-When you select external subtitles, Whisper automatically:
-
-1. Extracts a sample of audio from the video
-2. Transcribes it locally using AI (nothing sent to the cloud)
-3. Aligns the transcription against subtitle text
-4. Applies the correct delay offset
-
-The Whisper model (~75MB) downloads once on first use and caches locally. Subsequent uses are instant.
-
-## For Developers
-
-### Prerequisites
-
-- Node.js 18+
-- [pnpm](https://pnpm.io/installation) 10+
-
-### Development
+Requires Node.js 18+ and [pnpm](https://pnpm.io/installation) 10+.
 
 ```bash
 pnpm install
 pnpm start
 ```
 
-### Production Build
+Building and deploying, including the launcher, is covered in [BUILD.md](BUILD.md).
 
-```bash
-PUBLIC_PATH="/stremio-web-netflix/" pnpm run build
-```
+## Credits and licence
 
-## License
-
-Based on [Stremio Web](https://github.com/Stremio/stremio-web), copyright 2017-2023 Smart code, available under GPLv2. See [LICENSE](/LICENSE.md).
+Stremio Neo is based on [Stremio Web](https://github.com/Stremio/stremio-web), copyright 2017-2023 Smart Code, and is available under GPLv2. See [LICENSE](LICENSE.md).

@@ -1,8 +1,10 @@
 name: Release
 
+# Manual only. Release assets (StremioNeo.exe, the Mac zip) are built locally
+# by deploy.sh and uploaded by hand; the jobs below predate the download
+# bootstrapper and would overwrite those assets with mismatched builds.
 on:
-  release:
-    types: [published]
+  workflow_dispatch:
 
 jobs:
   release:
