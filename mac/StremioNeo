@@ -1,0 +1,30 @@
+#!/bin/bash
+# Stremio Neo for macOS.
+# Opens the official Stremio app with the Stremio Neo interface.
+
+WEBUI_URL="https://jeromenicholas07.github.io/stremio-neo/"
+
+STREMIO_APP=""
+for candidate in "/Applications/Stremio.app" "$HOME/Applications/Stremio.app"; do
+    if [ -d "$candidate" ]; then
+        STREMIO_APP="$candidate"
+        break
+    fi
+done
+
+if [ -z "$STREMIO_APP" ]; then
+    osascript -e 'display dialog "Stremio is not installed.\n\nInstall it from stremio.com/downloads, sign in once, then open Stremio Neo again." buttons {"OK"} default button "OK" with title "Stremio Neo" with icon caution'
+    open "https://www.stremio.com/downloads"
+    exit 1
+fi
+
+# A running Stremio ignores new launch arguments, so close it first.
+if pgrep -xq "Stremio"; then
+    osascript -e 'tell application "Stremio" to quit' >/dev/null 2>&1
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+        pgrep -xq "Stremio" || break
+        sleep 0.5
+    done
+fi
+
+exec open -n "$STREMIO_APP" --args --webui-url="$WEBUI_URL"
