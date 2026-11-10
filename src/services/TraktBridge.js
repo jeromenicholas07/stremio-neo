@@ -46,6 +46,8 @@ class TraktBridge {
         const hydrated = this._readSyncSnapshot();
         this._lastSync = hydrated.lastSync || 0;
         this._watchedItemsData = hydrated.watchedItemsData || [];
+        // Titles with the user's own 1-10 Trakt rating (taste export only).
+        this._ratingsData = hydrated.ratingsData || [];
         this._watchlistItemsData = hydrated.watchlistItemsData || [];
         this._notInterestedItemsData = hydrated.notInterestedItemsData || [];
         this._ratedImdbIds = new Set(hydrated.ratedImdb || []);
@@ -84,6 +86,7 @@ class TraktBridge {
             const snap = {
                 lastSync: this._lastSync,
                 watchedItemsData: this._watchedItemsData,
+                ratingsData: this._ratingsData,
                 watchlistItemsData: this._watchlistItemsData,
                 notInterestedItemsData: this._notInterestedItemsData,
                 ratedImdb: Array.from(this._ratedImdbIds),
@@ -429,6 +432,7 @@ class TraktBridge {
         this._notInterestedIds = new Set();
         this._allDismissedIds = new Set();
         this._watchedItemsData = [];
+        this._ratingsData = [];
         this._watchlistItemsData = [];
         this._notInterestedItemsData = [];
         this._ratedImdbIds = new Set();
@@ -684,6 +688,11 @@ class TraktBridge {
             return true;
         });
     }
+
+    // Full watch history (deduped, newest first) and rated titles — used by
+    // the taste snapshot exported for the "Claude recommended" row.
+    getWatchedItems() { return this._watchedItemsData; }
+    getRatings() { return this._ratingsData; }
 
     // Returns full watchlist item data for rendering rows
     getWatchlistItems() { return this._watchlistItemsData; }
@@ -986,6 +995,15 @@ class TraktBridge {
             });
             this._ratedIds = newRated;
             this._ratedImdbIds = ratedImdb;
+            const toRating = (r, key, type) => ({
+                id: r[key]?.ids?.imdb || (r[key]?.ids?.tmdb ? `tmdb:${r[key].ids.tmdb}` : null),
+                name: r[key]?.title || '', type, year: r[key]?.year || null,
+                rating: r.rating || null,
+            });
+            this._ratingsData = [
+                ...(Array.isArray(ratingsMovies) ? ratingsMovies : []).map((r) => toRating(r, 'movie', 'movie')),
+                ...(Array.isArray(ratingsShows) ? ratingsShows : []).map((r) => toRating(r, 'show', 'series')),
+            ].filter((r) => r.id && r.name);
             this._ratedTmdbIds = ratedTmdb;
 
             // Build watched IDs

@@ -843,6 +843,86 @@ class StremioLauncher
     // POST    -> encrypt and store the body verbatim (the UI decides its shape).
     // DELETE  -> forget it, on an explicit disconnect.
     // Only ever reachable from 127.0.0.1; the listener does not bind publicly.
+    // "Claude recommended" row. Two plain-JSON files in the shared dir, the
+    // hand-off between the web UI and a weekly Claude run on this machine:
+    //   claude-recommended.json  written by Claude, served to the UI (GET)
+    //   claude-taste.json        written by the UI (POST), read by Claude
+    // The recommendations file doubles as the opt-in: until something has
+    // created it, the UI gets "{}" and shows no row, and taste snapshots are
+    // refused, so nothing is written for users who don't run Claude.
+    // Unencrypted on purpose -- titles only, and Claude has to read/write them.
+    static string ClaudeRecsPath()
+    {
+        return Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "StremioLauncherFULL", "shared", "claude-recommended.json");
+    }
+
+    static string ClaudeTastePath()
+    {
+        return Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "StremioLauncherFULL", "shared", "claude-taste.json");
+    }
+
+    const int ClaudeTasteMaxBytes = 2 * 1024 * 1024;
+
+    static void HandleClaudeRecs(Stream stream, string method)
+    {
+        if (method != "GET")
+        {
+            WriteResponse(stream, 405, "text/plain", Encoding.UTF8.GetBytes("Method Not Allowed"), true);
+            return;
+        }
+        string json = "{}";
+        try
+        {
+            string recsPath = ClaudeRecsPath();
+            if (File.Exists(recsPath))
+            {
+                string text = File.ReadAllText(recsPath, Encoding.UTF8).Trim();
+                if (text.StartsWith("{")) json = text;
+            }
+        }
+        catch { json = "{}"; }
+        WriteResponse(stream, 200, "application/json", Encoding.UTF8.GetBytes(json), true);
+    }
+
+    static void HandleClaudeTaste(Stream stream, string method, Dictionary<string, string> reqHeaders)
+    {
+        if (method != "POST")
+        {
+            WriteResponse(stream, 405, "text/plain", Encoding.UTF8.GetBytes("Method Not Allowed"), true);
+            return;
+        }
+        string clStr;
+        int len = 0;
+        if (reqHeaders.TryGetValue("Content-Length", out clStr)) int.TryParse(clStr, out len);
+        if (len <= 0 || len > ClaudeTasteMaxBytes || !File.Exists(ClaudeRecsPath()))
+        {
+            // Not opted in (or nothing usable sent): accept and discard.
+            WriteResponse(stream, 200, "application/json",
+                Encoding.UTF8.GetBytes("{\"ok\":false}"), true);
+            return;
+        }
+        string body = ReadRequestBody(stream, reqHeaders);
+        try
+        {
+            string tastePath = ClaudeTastePath();
+            string tmp = tastePath + ".tmp";
+            File.WriteAllText(tmp, body, new UTF8Encoding(false));
+            if (File.Exists(tastePath)) File.Delete(tastePath);
+            File.Move(tmp, tastePath);
+            WriteResponse(stream, 200, "application/json",
+                Encoding.UTF8.GetBytes("{\"ok\":true}"), true);
+        }
+        catch
+        {
+            WriteResponse(stream, 500, "application/json",
+                Encoding.UTF8.GetBytes("{\"ok\":false}"), true);
+        }
+    }
+
     static void HandleTraktSession(Stream stream, string method, Dictionary<string, string> reqHeaders)
     {
         string sessionPath = TraktSessionPath();
@@ -955,6 +1035,16 @@ class StremioLauncher
         if (path == "/_launcher/trakt-session")
         {
             HandleTraktSession(stream, method, reqHeaders);
+            return;
+        }
+        if (path == "/_launcher/claude-recs")
+        {
+            HandleClaudeRecs(stream, method);
+            return;
+        }
+        if (path == "/_launcher/claude-taste")
+        {
+            HandleClaudeTaste(stream, method, reqHeaders);
             return;
         }
         WriteResponse(stream, 404, "text/plain", Encoding.UTF8.GetBytes("Not Found"), true);

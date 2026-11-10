@@ -147,3 +147,4 @@ function useTraktLists() {
 }
 
 module.exports = useTraktLists;
+module.exports.enrichItem = enrichItem;

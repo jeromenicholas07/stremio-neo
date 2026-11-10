@@ -16,6 +16,7 @@ const useTraktRecommendations = require('./useTraktRecommendations');
 const useWatchedNotRated = require('./useWatchedNotRated');
 const useTraktLists = require('./useTraktLists');
 const useTraktDiscoveryRows = require('./useTraktDiscoveryRows');
+const useClaudeRecommended = require('./useClaudeRecommended');
 const styles = require('./styles');
 
 const THRESHOLD = 5;
@@ -147,6 +148,7 @@ const BoardContent = () => {
     const watchedNotRatedItems = useWatchedNotRated();
     const { watchlistItems: traktWatchlistItems, notInterestedItems: traktNotInterestedItems } = useTraktLists();
     const traktDiscoveryRows = useTraktDiscoveryRows();
+    const claudeRecommended = useClaudeRecommended();
     const { libraryNames, libraryIds } = useLibraryItems();
 
     // Trakt auth is now handled via OAuth Device Code flow in Settings.
@@ -432,7 +434,7 @@ const BoardContent = () => {
     const MAX_MOBILE_ROWS = 10;
     const dedupedRows = React.useMemo(() => {
         const seenNames = new Set();
-        const result = { traktDisc: [], tmdbDisc: [], recs: [], content: [] };
+        const result = { claude: [], traktDisc: [], tmdbDisc: [], recs: [], content: [] };
 
         // Seed seenNames with Continue Watching items (they get priority)
         if (continueWatchingPreview.items) {
@@ -455,6 +457,11 @@ const BoardContent = () => {
             }
             return out;
         };
+
+        // Claude's weekly picks sit right under the Watchlist, so they claim
+        // their titles before any discovery row below can repeat them. Picks
+        // the user has since watched, queued or dismissed drop out here.
+        result.claude = filterAndCap(claudeRecommended);
 
         // Direct-from-Trakt-API discovery rows (replaces addon catalogs)
         for (const row of traktDiscoveryRows) {
@@ -519,7 +526,7 @@ const BoardContent = () => {
         }
 
         return result;
-    }, [traktDiscoveryRows, traktRows, recommendations, contentCatalogs, combinedDismissedSet, continueWatchingPreview.items]);
+    }, [claudeRecommended, traktDiscoveryRows, traktRows, recommendations, contentCatalogs, combinedDismissedSet, continueWatchingPreview.items]);
 
     return (
         <div className={styles['board-container']}>
@@ -552,6 +559,18 @@ const BoardContent = () => {
                             itemComponent={MetaItem}
                             source={'Trakt'}
                             rowContext={'watchlist'}
+                        />
+                        :
+                        null
+                    }
+                    {/* Claude's weekly picks — local file served by the launcher; absent for users without it */}
+                    {dedupedRows.claude.length > 0 ?
+                        <MetaRow
+                            className={classnames(styles['board-row'], 'animation-fade-in')}
+                            title={'Claude recommended'}
+                            catalog={{ content: { type: 'Ready', content: dedupedRows.claude } }}
+                            itemComponent={MetaItem}
+                            source={'Claude'}
                         />
                         :
                         null
