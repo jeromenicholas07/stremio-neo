@@ -20,6 +20,8 @@ const TASTE_EXPORT_KEY = 'claude_taste_exported_at';
 const TASTE_EXPORT_INTERVAL = 24 * 60 * 60 * 1000;
 const MAX_ITEMS = 30;
 const MAX_HISTORY = 600;
+const METAHUB_IMAGES = 'https://images.metahub.space';
+const ENRICHED_CACHE_KEY = 'claude_recs_enriched_v1';
 
 const slim = (item) => ({
     id: item.id,
@@ -97,6 +99,43 @@ function toRawItem(pick) {
     };
 }
 
+// Card shown the moment the picks arrive, before any TMDB lookup: artwork
+// comes straight from the IMDb id, so the row never waits on the TMDB queue
+// (which is busiest exactly when the home screen is loading).
+function toBaseItem(raw) {
+    return {
+        id: raw.id,
+        name: raw.name,
+        type: raw.type,
+        poster: `${METAHUB_IMAGES}/background/medium/${raw.id}/img`,
+        background: `${METAHUB_IMAGES}/background/medium/${raw.id}/img`,
+        posterShape: 'landscape',
+        releaseInfo: raw.year ? String(raw.year) : '',
+        deepLinks: {
+            metaDetailsStreams: raw.type === 'movie' ?
+                `#/metadetails/movie/${raw.id}/${raw.id}` :
+                `#/metadetails/${raw.type}/${raw.id}`,
+            metaDetailsVideos: `#/metadetails/${raw.type}/${raw.id}`,
+        },
+    };
+}
+
+// TMDB-enriched cards from the last load, valid for one generation of picks.
+function readEnrichedCache(generatedAt) {
+    try {
+        const cache = JSON.parse(localStorage.getItem(ENRICHED_CACHE_KEY) || 'null');
+        return cache && cache.generatedAt === generatedAt && cache.items ? cache.items : {};
+    } catch {
+        return {};
+    }
+}
+
+function writeEnrichedCache(generatedAt, items) {
+    try {
+        localStorage.setItem(ENRICHED_CACHE_KEY, JSON.stringify({ generatedAt, items }));
+    } catch { /* quota */ }
+}
+
 function useClaudeRecommended() {
     const [items, setItems] = React.useState([]);
 
@@ -106,12 +145,13 @@ function useClaudeRecommended() {
         let unsub = null;
 
         (async () => {
-            let picks;
+            let picks, generatedAt;
             try {
                 const res = await fetch(`${LAUNCHER_API}/_launcher/claude-recs`);
                 if (!res.ok) return;
                 const data = await res.json();
                 picks = data?.items;
+                generatedAt = data?.generatedAt || null;
             } catch {
                 return; // no launcher
             }
@@ -122,8 +162,21 @@ function useClaudeRecommended() {
 
             const raw = picks.map(toRawItem).filter(Boolean).slice(0, MAX_ITEMS);
             if (raw.length === 0) return;
-            const enriched = await Promise.all(raw.map(enrichItem));
-            if (!cancelled) setItems(enriched.filter((item) => item.name && item.poster));
+
+            // Show the row at once, then swap in TMDB artwork card by card as
+            // each lookup lands. One slow or failed lookup costs one card its
+            // nicer image, never the row.
+            const enriched = readEnrichedCache(generatedAt);
+            setItems(raw.map((item) => enriched[item.id] || toBaseItem(item)));
+
+            const pending = raw.filter((item) => !enriched[item.id]);
+            await Promise.all(pending.map(async (item) => {
+                const card = await enrichItem(item).catch(() => null);
+                if (!card || !card.poster || cancelled) return;
+                enriched[item.id] = card;
+                setItems((current) => current.map((c) => c.id === card.id ? card : c));
+            }));
+            if (pending.length > 0) writeEnrichedCache(generatedAt, enriched);
         })();
 
         return () => {
