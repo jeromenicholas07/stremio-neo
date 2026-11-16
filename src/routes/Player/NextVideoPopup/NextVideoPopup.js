@@ -9,7 +9,7 @@ const { Button, Image } = require('stremio/components');
 const styles = require('./styles');
 const { useTranslation } = require('react-i18next');
 
-const NextVideoPopup = ({ className, metaItem, nextVideo, onDismiss, onNextVideoRequested }) => {
+const NextVideoPopup = ({ className, metaItem, nextVideo, onDismiss, onNextVideoRequested, countdown }) => {
     const { t } = useTranslation();
     const profile = useProfile();
     const blurPosterImage = profile.settings.hideSpoilers && metaItem.type === 'series';
@@ -88,7 +88,10 @@ const NextVideoPopup = ({ className, metaItem, nextVideo, onDismiss, onNextVideo
                     </Button>
                     <Button ref={watchNowButtonRef} className={classnames(styles['button-container'], styles['play-button'])} onClick={onWatchNowButtonClick}>
                         <Icon className={styles['icon']} name={'play'} />
-                        <div className={styles['label']}>{t('PLAYER_NEXT_VIDEO_BUTTON_WATCH')}</div>
+                        <div className={styles['label']}>
+                            {t('PLAYER_NEXT_VIDEO_BUTTON_WATCH')}
+                            {typeof countdown === 'number' ? ` (${countdown})` : null}
+                        </div>
                     </Button>
                 </div>
             </div>
@@ -101,7 +104,9 @@ NextVideoPopup.propTypes = {
     metaItem: PropTypes.object,
     nextVideo: PropTypes.object,
     onDismiss: PropTypes.func,
-    onNextVideoRequested: PropTypes.func
+    onNextVideoRequested: PropTypes.func,
+    // Seconds until the next episode plays on its own (auto-next), if it will.
+    countdown: PropTypes.number,
 };
 
 module.exports = NextVideoPopup;

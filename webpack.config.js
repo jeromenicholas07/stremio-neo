@@ -39,7 +39,8 @@ module.exports = (env, argv) => ({
     entry: {
         main: './src/index.js',
         worker: './node_modules/@stremio/stremio-core-web/worker.js',
-        whisperWorker: './src/workers/whisperWorker.js'
+        whisperWorker: './src/workers/whisperWorker.js',
+        skipWorker: './src/workers/skipWorker.js'
     },
     output: {
         path: path.join(__dirname, 'build'),

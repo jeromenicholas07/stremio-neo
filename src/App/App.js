@@ -9,6 +9,7 @@ const { NotFound } = require('stremio/routes');
 const { FileDropProvider, PlatformProvider, ToastProvider, TooltipProvider, ShortcutsProvider, CONSTANTS, withCoreSuspender, useShell, useBinaryState } = require('stremio/common');
 const ServicesToaster = require('./ServicesToaster');
 const DeepLinkHandler = require('./DeepLinkHandler');
+const SkipPrep = require('./SkipPrep');
 const SearchParamsHandler = require('./SearchParamsHandler');
 const { default: UpdaterBanner } = require('./UpdaterBanner');
 const { default: ShortcutsModal } = require('./ShortcutsModal');
@@ -220,6 +221,7 @@ const App = () => {
                                                 <ServicesToaster />
                                                 <DeepLinkHandler />
                                                 <SearchParamsHandler />
+                                                <SkipPrep />
                                                 <UpdaterBanner className={styles['updater-banner-container']} />
                                                 <RouterWithProtectedRoutes
                                                     className={styles['router']}

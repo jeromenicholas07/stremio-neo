@@ -107,4 +107,47 @@ async function del(dbName, storeName, key) {
     }
 }
 
-module.exports = { available, get, set, del };
+async function keys(dbName, storeName) {
+    if (!available()) return [];
+    let db = null;
+    try {
+        db = await open(dbName, storeName);
+        return await new Promise((resolve, reject) => {
+            const request = db.transaction(storeName, 'readonly').objectStore(storeName).getAllKeys();
+            request.onsuccess = () => resolve(request.result || []);
+            request.onerror = () => reject(request.error);
+        });
+    } catch {
+        return [];
+    } finally {
+        if (db) {
+            try { db.close(); } catch { /* already closed */ }
+        }
+    }
+}
+
+// Several deletes in one transaction.
+async function delMany(dbName, storeName, list) {
+    if (!available() || list.length === 0) return false;
+    let db = null;
+    try {
+        db = await open(dbName, storeName);
+        await new Promise((resolve, reject) => {
+            const tx = db.transaction(storeName, 'readwrite');
+            const objectStore = tx.objectStore(storeName);
+            list.forEach((key) => objectStore.delete(key));
+            tx.oncomplete = () => resolve();
+            tx.onerror = () => reject(tx.error);
+            tx.onabort = () => reject(tx.error);
+        });
+        return true;
+    } catch {
+        return false;
+    } finally {
+        if (db) {
+            try { db.close(); } catch { /* already closed */ }
+        }
+    }
+}
+
+module.exports = { available, get, set, del, keys, delMany };

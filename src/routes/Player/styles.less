@@ -150,6 +150,16 @@ html:not(.active-slider-within) {
             overflow: auto;
         }
 
+        // Stays visible while the controls are hidden: it is the one thing
+        // worth showing over a playing intro.
+        &.skip-layer {
+            top: initial;
+            left: initial;
+            right: 4rem;
+            bottom: 9rem;
+            overflow: visible;
+        }
+
         &.side-drawer-layer {
             right: 0;
             left: initial;

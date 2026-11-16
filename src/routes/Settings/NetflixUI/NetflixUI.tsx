@@ -1,6 +1,7 @@
 import React, { forwardRef, useState, useCallback, useEffect, useRef } from 'react';
 import { AutoPickEditor } from 'stremio/components';
 import { Section, Option } from '../components';
+import { getSkipSettings, setSkipSettings } from 'stremio/services/skipSegments/settings';
 import styles from './NetflixUI.less';
 
 const { useToast } = require('stremio/common');
@@ -99,6 +100,7 @@ const ModernUI = forwardRef<HTMLDivElement>((_, ref) => {
     const [trailerLang, setTrailerLang] = useState(() => getSetting('netflix_ui_trailer_lang', 'en'));
     const [recSource, setRecSource] = useState(() => getSetting('netflix_ui_rec_source', 'tmdb'));
     const [autoPick, setAutoPick] = useState(() => getGlobalAutoPickSettings());
+    const [skip, setSkip] = useState(() => getSkipSettings());
     const [debugEnabled, setDebugEnabled] = useState(() => getSetting('netflix_ui_debug', 'false') === 'true');
     const [incognitoEnabled, setIncognitoEnabledState] = useState(() => isIncognitoEnabled());
     const [showTraktAdvanced, setShowTraktAdvanced] = useState(false);
@@ -264,6 +266,27 @@ const ModernUI = forwardRef<HTMLDivElement>((_, ref) => {
         setRecSource(e.target.value);
         reportSave(setSetting('netflix_ui_rec_source', e.target.value));
     }, [reportSave]);
+
+    const updateSkip = useCallback((partial: Record<string, unknown>) => {
+        reportSave(setSkipSettings(partial));
+        setSkip(getSkipSettings());
+    }, [reportSave]);
+
+    const onSkipModeChange = useCallback((e: React.ChangeEvent<HTMLSelectElement>) => {
+        updateSkip({ mode: e.target.value });
+    }, [updateSkip]);
+
+    const onSkipDatabasesToggle = useCallback(() => {
+        updateSkip({ useDatabases: !skip.useDatabases });
+    }, [updateSkip, skip.useDatabases]);
+
+    const onSkipAnalysisToggle = useCallback(() => {
+        updateSkip({ backgroundAnalysis: !skip.backgroundAnalysis });
+    }, [updateSkip, skip.backgroundAnalysis]);
+
+    const onAutoNextToggle = useCallback(() => {
+        updateSkip({ autoNext: !skip.autoNext });
+    }, [updateSkip, skip.autoNext]);
 
     const onAutoPickChange = useCallback((next: any) => {
         setAutoPick(next);
@@ -655,6 +678,66 @@ const ModernUI = forwardRef<HTMLDivElement>((_, ref) => {
                     value={autoPick}
                     onChange={onAutoPickChange}
                 />
+            </Option>
+
+            <Option label={'Skip Intro'}>
+                <select className={styles['select-input']} value={skip.mode} onChange={onSkipModeChange}>
+                    <option value={'off'}>Off</option>
+                    <option value={'button'}>Show a Skip button</option>
+                    <option value={'auto'}>Skip automatically when confirmed</option>
+                </select>
+                <div className={styles['hint']}>
+                    Automatic skipping only happens when two sources agree on the timing; otherwise the button is shown.
+                    Each show can be set separately from the menu next to the button while watching.
+                </div>
+            </Option>
+
+            <Option label={'Skip Intro: Online Databases'}>
+                <div className={styles['input-row']}>
+                    <span className={styles['option-desc']}>
+                        Look up intro and credits times on TheIntroDB. This sends the IMDb id of the show,
+                        season and episode number to that service.
+                    </span>
+                    <button
+                        className={skip.useDatabases ? styles['toggle-on'] : styles['toggle-off']}
+                        onClick={onSkipDatabasesToggle}
+                    >
+                        {skip.useDatabases ? 'ON' : 'OFF'}
+                    </button>
+                </div>
+            </Option>
+
+            <Option label={'Skip Intro: Audio Analysis'}>
+                <div className={styles['input-row']}>
+                    <span className={styles['option-desc']}>
+                        Find the intro and credits by comparing the opening and closing minutes of an episode with
+                        its neighbours. Prepares the next episodes while you watch, and the episode each Continue
+                        Watching show is up to (top first) while no video is playing. This downloads a few minutes of
+                        those episodes in the background. Needs the Stremio Neo launcher.
+                    </span>
+                    <button
+                        className={skip.backgroundAnalysis ? styles['toggle-on'] : styles['toggle-off']}
+                        onClick={onSkipAnalysisToggle}
+                    >
+                        {skip.backgroundAnalysis ? 'ON' : 'OFF'}
+                    </button>
+                </div>
+            </Option>
+
+            <Option label={'Skip Credits: Play Next Episode'}>
+                <div className={styles['input-row']}>
+                    <span className={styles['option-desc']}>
+                        When the end credits are found with high confidence, count down 5 seconds from where they
+                        start and play the next episode. Dismiss the popup to keep watching. Without it, the
+                        next-episode popup still appears when the credits start.
+                    </span>
+                    <button
+                        className={skip.autoNext ? styles['toggle-on'] : styles['toggle-off']}
+                        onClick={onAutoNextToggle}
+                    >
+                        {skip.autoNext ? 'ON' : 'OFF'}
+                    </button>
+                </div>
             </Option>
 
             {/* ─── Incognito ─── */}

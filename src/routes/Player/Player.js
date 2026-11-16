@@ -27,6 +27,12 @@ const useStatistics = require('./useStatistics');
 const useVideo = require('./useVideo');
 const useAudioTrackRecovery = require('./useAudioTrackRecovery');
 const useWhisperSync = require('./useWhisperSync');
+const useSkipSegments = require('./useSkipSegments');
+const createPlayerShellTransport = require('stremio/services/Shell/playerShellTransport');
+const SkipButton = require('./SkipButton');
+
+// Seconds counted down before auto-next plays the next episode.
+const AUTO_NEXT_COUNTDOWN_SECONDS = 5;
 const styles = require('./styles');
 const Video = require('./Video');
 const { default: Indicator } = require('./Indicator/Indicator');
@@ -144,41 +150,22 @@ const Player = ({ urlParams, queryParams }) => {
     }, [settings]);
 
     const handleNextVideoNavigation = React.useCallback((deepLinks, bingeWatching, ended) => {
-        // When our auto-pick feature is on, always route the next video through
-        // its streams page so auto-pick resolves a FRESH stream for it. Core's
-        // `player` deeplink reuses the previous episode's recorded stream, which
-        // is the wrong file for a new episode — going through the streams page
-        // lets StreamsList's auto-pick re-run and select a valid stream.
-        // Auto-pick also implies the user wants continuous playback, so honor
-        // it on episode-end even when the native bingeWatching setting is off.
+        // The next episode always goes through its streams page, where
+        // auto-pick (when on) picks a fresh stream for it. Core's `player`
+        // deeplink reuses the previous episode's recorded stream, the wrong
+        // file for a new episode; and one route means Skip Intro's look-ahead
+        // knows which file to prepare. Auto-pick also implies the user wants
+        // continuous playback, so it is honored on episode-end even when the
+        // native bingeWatching setting is off.
         const autoPickOn = !!getPlayableAutoPickSettings(urlParams.type, urlParams.id);
-
-        if (autoPickOn && deepLinks.metaDetailsStreams) {
-            isNavigating.current = true;
-            window.location.replace(deepLinks.metaDetailsStreams);
+        if (ended && !bingeWatching && !autoPickOn) {
+            window.history.back();
             return;
         }
-
-        if (ended) {
-            if (bingeWatching) {
-                if (deepLinks.player) {
-                    isNavigating.current = true;
-                    window.location.replace(deepLinks.player);
-                } else if (deepLinks.metaDetailsStreams) {
-                    isNavigating.current = true;
-                    window.location.replace(deepLinks.metaDetailsStreams);
-                }
-            } else {
-                window.history.back();
-            }
-        } else {
-            if (deepLinks.player) {
-                isNavigating.current = true;
-                window.location.replace(deepLinks.player);
-            } else if (deepLinks.metaDetailsStreams) {
-                isNavigating.current = true;
-                window.location.replace(deepLinks.metaDetailsStreams);
-            }
+        const target = deepLinks.metaDetailsStreams || deepLinks.player;
+        if (target) {
+            isNavigating.current = true;
+            window.location.replace(target);
         }
     }, [urlParams.type, urlParams.id]);
 
@@ -356,6 +343,19 @@ const Player = ({ urlParams, queryParams }) => {
         video.state.duration,
     );
 
+    const skipSegments = useSkipSegments({
+        player,
+        stream: player.stream?.type === 'Ready' ? player.stream.content : null,
+        time: video.state.time,
+        duration: video.state.duration,
+        buffering: video.state.buffering,
+        paused: video.state.paused,
+        playbackSpeed: video.state.playbackSpeed,
+        streamingServerUrl: streamingServer.baseUrl || CONSTANTS.DEFAULT_STREAMING_SERVER_URL,
+        onSeek: onSeekRequested,
+        onSpeed: onPlaybackSpeedChanged,
+    });
+
     const onSubtitlesSizeChanged = React.useCallback((size) => {
         video.setSubtitlesSize(size);
         streamStateChanged({ subtitleSize: size });
@@ -482,7 +482,9 @@ const Player = ({ urlParams, queryParams }) => {
                 seriesInfo: player.seriesInfo,
             }, {
                 chromecastTransport: services.chromecast.active ? services.chromecast.transport : null,
-                shellTransport: services.shell.active ? services.shell.transport : null,
+                // Its own wrapper, so the mpv observers and listeners each player
+                // sets up do not pile up across episodes (see playerShellTransport).
+                shellTransport: services.shell.active ? createPlayerShellTransport(services.shell.transport) : null,
             });
         }
     }, [streamingServer.baseUrl, player.selected, player.stream, forceTranscoding, casting]);
@@ -512,7 +514,13 @@ const Player = ({ urlParams, queryParams }) => {
 
     React.useEffect(() => {
         if (player.nextVideo !== null && !nextVideoPopupDismissed.current) {
-            if (video.state.time !== null && video.state.duration !== null && video.state.time < video.state.duration && (video.state.duration - video.state.time) <= settings.nextVideoNotificationDuration) {
+            // Where the credits are known to start, offer the next episode
+            // from there instead of only in the last seconds of the file. With
+            // the popup turned off, it still shows when it is about to play
+            // the next episode on its own.
+            const inCredits = (settings.nextVideoNotificationDuration > 0 || skipSegments.autoNextAt !== null)
+                && skipSegments.creditsStart !== null && video.state.time >= skipSegments.creditsStart;
+            if (video.state.time !== null && video.state.duration !== null && video.state.time < video.state.duration && ((video.state.duration - video.state.time) <= settings.nextVideoNotificationDuration || inCredits)) {
                 openNextVideoPopup();
             } else {
                 closeNextVideoPopup();
@@ -526,7 +534,26 @@ const Player = ({ urlParams, queryParams }) => {
         } else {
             window.playerNextVideo = null;
         }
-    }, [player.nextVideo, video.state.time, video.state.duration]);
+    }, [player.nextVideo, video.state.time, video.state.duration, skipSegments.creditsStart, skipSegments.autoNextAt]);
+
+    // Auto-next: once confidently detected credits start, count down in
+    // media time (pausing pauses it, seeking back before the credits closes
+    // the popup and stops it) and play the next episode once. Dismissing the
+    // popup cancels it.
+    const autoNextFired = React.useRef(false);
+    React.useEffect(() => {
+        autoNextFired.current = false;
+    }, [player.nextVideo]);
+    const autoNextCountdown = nextVideoPopupOpen && player.nextVideo !== null && skipSegments.autoNextAt !== null
+        && video.state.time !== null && video.state.time >= skipSegments.autoNextAt
+        ? Math.max(0, AUTO_NEXT_COUNTDOWN_SECONDS - (video.state.time - skipSegments.autoNextAt) / 1000)
+        : null;
+    React.useEffect(() => {
+        if (autoNextCountdown === 0 && !autoNextFired.current && !nextVideoPopupDismissed.current && !isNavigating.current) {
+            autoNextFired.current = true;
+            onNextVideoRequested();
+        }
+    }, [autoNextCountdown, onNextVideoRequested]);
 
     // Auto subtitles track selection
     React.useEffect(() => {
@@ -1054,6 +1081,21 @@ const Player = ({ urlParams, queryParams }) => {
                         nextVideo={player.nextVideo}
                         onDismiss={onDismissNextVideoPopup}
                         onNextVideoRequested={onNextVideoRequested}
+                        countdown={autoNextCountdown !== null ? Math.ceil(autoNextCountdown) : null}
+                    />
+                    :
+                    null
+            }
+            {
+                !menusOpen && !nextVideoPopupOpen ?
+                    <SkipButton
+                        className={classnames(styles['layer'], styles['skip-layer'])}
+                        segment={skipSegments.active}
+                        notice={skipSegments.notice}
+                        override={skipSegments.override}
+                        onSkip={skipSegments.skip}
+                        onUndo={skipSegments.undo}
+                        onOverrideChange={skipSegments.setOverride}
                     />
                     :
                     null
