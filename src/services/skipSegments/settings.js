@@ -10,12 +10,17 @@ const CHANGE_EVENT = 'skip-settings-changed';
 const MODES = ['off', 'button', 'auto'];
 
 const DEFAULTS = {
-    mode: 'button',
+    mode: 'auto',
     useDatabases: true,
     backgroundAnalysis: true,
     // Play the next episode once confidently detected credits start.
-    autoNext: false,
+    autoNext: true,
 };
+
+// Configs saved before this version hold the first defaults (Button, no
+// auto-next) frozen in by any change on the settings page, chosen or not;
+// they are moved to the current defaults once. Off stays off.
+const CONFIG_VERSION = 2;
 
 function read(key, fallback) {
     try {
@@ -37,8 +42,26 @@ function write(key, value) {
     }
 }
 
+function upgrade(stored) {
+    if (Object.keys(stored).length === 0 || stored.version >= CONFIG_VERSION) return stored;
+    const next = {
+        ...stored,
+        mode: stored.mode === 'button' ? DEFAULTS.mode : stored.mode,
+        autoNext: DEFAULTS.autoNext,
+        version: CONFIG_VERSION,
+    };
+    // Saved quietly: this runs while components render, where a change
+    // event would update others mid-render. Nothing on screen differs.
+    try {
+        localStorage.setItem(CONFIG_KEY, JSON.stringify(next));
+    } catch {
+        // Not saved: upgraded again on the next read.
+    }
+    return next;
+}
+
 function getSkipSettings() {
-    const stored = read(CONFIG_KEY, {});
+    const stored = upgrade(read(CONFIG_KEY, {}));
     return {
         mode: MODES.includes(stored.mode) ? stored.mode : DEFAULTS.mode,
         useDatabases: typeof stored.useDatabases === 'boolean' ? stored.useDatabases : DEFAULTS.useDatabases,
@@ -48,7 +71,7 @@ function getSkipSettings() {
 }
 
 function setSkipSettings(partial) {
-    return write(CONFIG_KEY, { ...getSkipSettings(), ...partial });
+    return write(CONFIG_KEY, { ...getSkipSettings(), ...partial, version: CONFIG_VERSION });
 }
 
 function getSkipOverride(metaId) {
