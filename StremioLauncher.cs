@@ -1,12 +1,14 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Net;
 using System.Net.Sockets;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading;
 
 class StremioLauncher
@@ -20,6 +22,8 @@ class StremioLauncher
     // is really ours. Below this it forwarded to a peer and exited; the value
     // only has to outlast a pipe connect and write, not any UI work.
     const int SHELL_FORWARD_GRACE_MS = 3000;
+    // Longest an audio read may run before its ffmpeg is killed.
+    const int AUDIO_EXTRACT_TIMEOUT_MS = 45000;
 
     // ── Debug console (winexe by default — no terminal popup) ──
     // Compiled with /target:winexe so the launcher runs without a console
@@ -158,7 +162,7 @@ class StremioLauncher
         // Without it GitHub Pages' max-age=600 pins a stale bundle for up to 10
         // minutes after every deploy (the service worker often does not control
         // navigations inside the Stremio shell webview).
-        const string WEB_UI_CACHE_VERSION = "2026-09-13-probe-ipv4";
+        const string WEB_UI_CACHE_VERSION = "2026-11-15-skip-reads";
         string webuiUrl = "https://jeromenicholas07.github.io/stremio-neo/?v="
             + Uri.EscapeDataString(WEB_UI_CACHE_VERSION)
             + "#/?streamingServerUrl=" + Uri.EscapeDataString("http://127.0.0.1:12470/");
@@ -793,6 +797,35 @@ class StremioLauncher
         return null;
     }
 
+    // The ffmpeg sidecar's query values, checked once before any endpoint
+    // builds a command line from them (see HandleAudioRequest).
+    static bool SafeFfmpegParams(string qs)
+    {
+        string mediaURL = GetQueryParam(qs, "mediaURL");
+        if (mediaURL != null)
+        {
+            if (!(mediaURL.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
+                || mediaURL.StartsWith("https://", StringComparison.OrdinalIgnoreCase))) return false;
+            if (!SafeFfmpegText(mediaURL)) return false;
+        }
+        string headers = GetQueryParam(qs, "headers");
+        if (headers != null && (headers.IndexOf('"') >= 0 || headers.IndexOf('\\') >= 0)) return false;
+        foreach (string name in new[] { "start", "duration" })
+        {
+            string value = GetQueryParam(qs, name);
+            double number;
+            if (value != null && !double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out number)) return false;
+        }
+        return true;
+    }
+
+    static bool SafeFfmpegText(string value)
+    {
+        foreach (char c in value)
+            if (c == '"' || c == '\\' || char.IsControl(c)) return false;
+        return true;
+    }
+
     // ── Internal launcher control endpoints ──────────────────
     // GET  /_launcher/debug      → {"enabled": <bool>}
     // POST /_launcher/debug      body: {"enabled": <bool>}
@@ -1362,6 +1395,33 @@ class StremioLauncher
                     return;
                 }
 
+                // Every endpoint below splices these into ffmpeg's command line.
+                // Any page can reach this port, so nothing may carry a quote or a
+                // backslash out of its argument, and only web media is read.
+                if (!SafeFfmpegParams(qs))
+                {
+                    WriteResponse(stream, 400, "text/plain", Encoding.UTF8.GetBytes("Bad parameters"), true);
+                    return;
+                }
+
+                if (path == "/media-info")
+                {
+                    HandleMediaInfo(stream, qs);
+                    return;
+                }
+
+                if (path == "/scene-cuts")
+                {
+                    HandleSceneCuts(stream, qs);
+                    return;
+                }
+
+                if (path == "/frames")
+                {
+                    HandleFrames(stream, qs);
+                    return;
+                }
+
                 if (path != "/audio-extract")
                 {
                     WriteResponse(stream, 404, "text/plain", Encoding.UTF8.GetBytes("Not found"), true);
@@ -1404,18 +1464,35 @@ class StremioLauncher
                     CreateNoWindow = true
                 };
 
-                var proc = Process.Start(psi);
+                using (var proc = Process.Start(psi))
+                {
                 StringBuilder stderrBuf = new StringBuilder();
                 proc.ErrorDataReceived += (s, e) => { if (e.Data != null) stderrBuf.AppendLine(e.Data); };
                 proc.BeginErrorReadLine();
 
+                // A stalled stream leaves ffmpeg waiting on the network with
+                // stdout open, and CopyTo would wait with it: the thread and
+                // the process were held for good. Kill it on a deadline
+                // instead (the web side gives up at 60 s).
+                bool timedOut = false;
                 var ms = new MemoryStream();
-                proc.StandardOutput.BaseStream.CopyTo(ms);
-
-                if (!proc.WaitForExit(30000))
+                using (new Timer(_ =>
                 {
-                    try { proc.Kill(); } catch { }
-                    WriteResponse(stream, 504, "text/plain", Encoding.UTF8.GetBytes("FFmpeg timed out (30s)"), true);
+                    timedOut = true;
+                    try { if (!proc.HasExited) proc.Kill(); } catch { }
+                }, null, AUDIO_EXTRACT_TIMEOUT_MS, Timeout.Infinite))
+                {
+                    proc.StandardOutput.BaseStream.CopyTo(ms);
+                    if (!proc.WaitForExit(5000))
+                    {
+                        timedOut = true;
+                        try { proc.Kill(); } catch { }
+                    }
+                }
+
+                if (timedOut)
+                {
+                    WriteResponse(stream, 504, "text/plain", Encoding.UTF8.GetBytes("FFmpeg timed out"), true);
                     return;
                 }
 
@@ -1440,12 +1517,280 @@ class StremioLauncher
                     return;
                 }
                 WriteResponse(stream, 200, "application/octet-stream", pcm, true);
+                }
             }
         }
         catch (Exception ex)
         {
             LogError("[Extract] Error: " + ex.Message);
         }
+    }
+
+    // GET /frames?mediaURL=<url>&start=<s>&duration=<s>[&headers=<raw headers>]
+    //   -> raw 8-bit grey frames, 160x90, 2 per second, back to back
+    //
+    // Small frames from the end of an episode, for Skip Intro to recognise a
+    // credit roll. It runs alongside playback, so ffmpeg gets one thread, below
+    // normal priority and no hardware decoding (the GPU is mpv's), and skips
+    // the in-loop deblocking that nothing at this size can see.
+    static void HandleFrames(Stream stream, string qs)
+    {
+        string mediaURL = GetQueryParam(qs, "mediaURL");
+        double start, duration;
+        if (string.IsNullOrEmpty(mediaURL)
+            || !double.TryParse(GetQueryParam(qs, "start") ?? "0", NumberStyles.Float, CultureInfo.InvariantCulture, out start)
+            || !double.TryParse(GetQueryParam(qs, "duration") ?? "60", NumberStyles.Float, CultureInfo.InvariantCulture, out duration))
+        {
+            WriteResponse(stream, 400, "text/plain", Encoding.UTF8.GetBytes("Missing or bad parameters"), true);
+            return;
+        }
+        start = Math.Max(0, start);
+        duration = Math.Min(120, Math.Max(1, duration));
+
+        string ffArgs = string.Format(CultureInfo.InvariantCulture,
+            "-hide_banner -nostats -loglevel error -threads 1 -skip_loop_filter all " +
+            "-seekable 1 -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 3 -rw_timeout 8000000 " +
+            "-ss {0:0.###} -i \"{1}\" -t {2:0.###} -an -sn " +
+            "-vf \"fps=2,scale=160:90:flags=area,format=gray\" -filter_threads 1 -f rawvideo -pix_fmt gray pipe:1",
+            start, mediaURL, duration);
+        string customHeaders = GetQueryParam(qs, "headers");
+        if (!string.IsNullOrEmpty(customHeaders))
+            ffArgs = string.Format("-headers \"{0}\r\n\" {1}", customHeaders, ffArgs);
+
+        var psi = new ProcessStartInfo(_ffmpeg, ffArgs)
+        {
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true
+        };
+        using (var proc = Process.Start(psi))
+        {
+            try { proc.PriorityClass = ProcessPriorityClass.BelowNormal; } catch { }
+            proc.ErrorDataReceived += (s, e) => { };
+            proc.BeginErrorReadLine();
+            bool timedOut = false;
+            var ms = new MemoryStream();
+            using (new Timer(_ =>
+            {
+                timedOut = true;
+                try { if (!proc.HasExited) proc.Kill(); } catch { }
+            }, null, AUDIO_EXTRACT_TIMEOUT_MS, Timeout.Infinite))
+            {
+                proc.StandardOutput.BaseStream.CopyTo(ms);
+                if (!proc.WaitForExit(5000))
+                {
+                    timedOut = true;
+                    try { proc.Kill(); } catch { }
+                }
+            }
+            if (timedOut)
+            {
+                WriteResponse(stream, 504, "text/plain", Encoding.UTF8.GetBytes("FFmpeg timed out"), true);
+                return;
+            }
+            byte[] frames = ms.ToArray();
+            if (frames.Length == 0)
+            {
+                WriteResponse(stream, 502, "text/plain", Encoding.UTF8.GetBytes("Could not read the video"), true);
+                return;
+            }
+            WriteResponse(stream, 200, "application/octet-stream", frames, true);
+        }
+    }
+
+    // GET /scene-cuts?mediaURL=<url>&start=<s>&duration=<s>[&headers=<raw headers>]
+    //   -> {"cuts": [<seconds>], "blacks": [[<start>, <end>]]}
+    //
+    // Hard cuts and black stretches in a few seconds of video, so Skip Intro
+    // can land on the first frame of the episode rather than near it. Times
+    // are absolute: ffmpeg prints them from the seek point.
+    static readonly Regex ScenePts = new Regex(@"pts_time:([\d.]+)", RegexOptions.Compiled);
+    static readonly Regex SceneBlack = new Regex(@"black_start:([\d.]+) black_end:([\d.]+)", RegexOptions.Compiled);
+    static readonly Regex SceneLuma = new Regex(@"lavfi\.signalstats\.YAVG=([\d.]+)", RegexOptions.Compiled);
+
+    static void HandleSceneCuts(Stream stream, string qs)
+    {
+        string mediaURL = GetQueryParam(qs, "mediaURL");
+        double start, duration;
+        if (string.IsNullOrEmpty(mediaURL)
+            || !double.TryParse(GetQueryParam(qs, "start") ?? "0", NumberStyles.Float, CultureInfo.InvariantCulture, out start)
+            || !double.TryParse(GetQueryParam(qs, "duration") ?? "6", NumberStyles.Float, CultureInfo.InvariantCulture, out duration))
+        {
+            WriteResponse(stream, 400, "text/plain", Encoding.UTF8.GetBytes("Missing or bad parameters"), true);
+            return;
+        }
+        start = Math.Max(0, start);
+        duration = Math.Min(15, Math.Max(1, duration));
+
+        string ffArgs = string.Format(CultureInfo.InvariantCulture,
+            // A debrid host can stall mid-read: give up on a silent connection
+            // after 8 s and reconnect, rather than hang until the time limit.
+            "-hide_banner -nostats -seekable 1 -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 3 " +
+            "-rw_timeout 8000000 -ss {0:0.###} -i \"{1}\" -t {2:0.###} -an -sn " +
+            "-vf \"scale=320:-2,signalstats,metadata=print:key=lavfi.signalstats.YAVG," +
+            "blackdetect=d=0.04:pix_th=0.10,select='gt(scene,0.25)',showinfo\" -f null -",
+            start, mediaURL, duration);
+        string customHeaders = GetQueryParam(qs, "headers");
+        if (!string.IsNullOrEmpty(customHeaders))
+            ffArgs = string.Format("-headers \"{0}\r\n\" {1}", customHeaders, ffArgs);
+
+        var psi = new ProcessStartInfo(_ffmpeg, ffArgs)
+        {
+            UseShellExecute = false,
+            RedirectStandardError = true,
+            StandardErrorEncoding = Encoding.UTF8,
+            CreateNoWindow = true
+        };
+        using (var proc = Process.Start(psi))
+        {
+            StringBuilder stderrBuf = new StringBuilder();
+            proc.ErrorDataReceived += (s, e) => { if (e.Data != null) lock (stderrBuf) stderrBuf.AppendLine(e.Data); };
+            proc.BeginErrorReadLine();
+            if (!proc.WaitForExit(30000))
+            {
+                try { proc.Kill(); } catch { }
+                WriteResponse(stream, 504, "text/plain", Encoding.UTF8.GetBytes("FFmpeg timed out (30s)"), true);
+                return;
+            }
+            proc.WaitForExit();
+            if (proc.ExitCode != 0)
+            {
+                WriteResponse(stream, 502, "text/plain", Encoding.UTF8.GetBytes("Could not read the video"), true);
+                return;
+            }
+            string stderr;
+            lock (stderrBuf) stderr = stderrBuf.ToString();
+            var inv = CultureInfo.InvariantCulture;
+            var cuts = new StringBuilder();
+            var blacks = new StringBuilder();
+            var luma = new StringBuilder();
+            double frameAt = -1;
+            foreach (string line in stderr.Split('\n'))
+            {
+                Match pts = ScenePts.Match(line);
+                if (line.Contains("Parsed_showinfo") && pts.Success)
+                    cuts.Append(cuts.Length > 0 ? "," : "").Append((start + double.Parse(pts.Groups[1].Value, inv)).ToString("0.###", inv));
+                if (line.Contains("Parsed_metadata"))
+                {
+                    if (pts.Success) frameAt = start + double.Parse(pts.Groups[1].Value, inv);
+                    Match y = SceneLuma.Match(line);
+                    if (y.Success && frameAt >= 0)
+                        luma.Append(luma.Length > 0 ? "," : "").Append("[").Append(frameAt.ToString("0.###", inv))
+                            .Append(",").Append(double.Parse(y.Groups[1].Value, inv).ToString("0.#", inv)).Append("]");
+                }
+                Match black = SceneBlack.Match(line);
+                if (black.Success)
+                {
+                    double a = start + double.Parse(black.Groups[1].Value, inv);
+                    double b = start + double.Parse(black.Groups[2].Value, inv);
+                    blacks.Append(blacks.Length > 0 ? "," : "").Append("[").Append(a.ToString("0.###", inv))
+                        .Append(",").Append(b.ToString("0.###", inv)).Append("]");
+                }
+            }
+            var json = new StringBuilder("{\"cuts\":[").Append(cuts).Append("],\"blacks\":[").Append(blacks)
+                .Append("],\"luma\":[").Append(luma).Append("]}");
+            WriteResponse(stream, 200, "application/json", Encoding.UTF8.GetBytes(json.ToString()), true);
+        }
+    }
+
+    // GET /media-info?mediaURL=<url>[&headers=<raw headers>]
+    //   -> {"duration": <seconds|null>, "chapters": [{"start", "end", "title"}]}
+    //
+    // Duration and embedded chapter markers of a media file. The shell cannot
+    // hand mpv's chapter list to the web UI, so Skip Intro reads them here:
+    // ffmpeg given an input and no output prints the container's stream table
+    // (chapters included) and exits non-zero, which is the expected outcome.
+    static void HandleMediaInfo(Stream stream, string qs)
+    {
+        string mediaURL = GetQueryParam(qs, "mediaURL");
+        if (string.IsNullOrEmpty(mediaURL))
+        {
+            WriteResponse(stream, 400, "text/plain", Encoding.UTF8.GetBytes("Missing mediaURL"), true);
+            return;
+        }
+
+        string ffArgs = string.Format("-hide_banner -i \"{0}\"", mediaURL);
+        string customHeaders = GetQueryParam(qs, "headers");
+        if (!string.IsNullOrEmpty(customHeaders))
+            ffArgs = string.Format("-headers \"{0}\r\n\" {1}", customHeaders, ffArgs);
+
+        var psi = new ProcessStartInfo(_ffmpeg, ffArgs)
+        {
+            UseShellExecute = false,
+            RedirectStandardError = true,
+            StandardErrorEncoding = Encoding.UTF8,
+            CreateNoWindow = true
+        };
+
+        var proc = Process.Start(psi);
+        StringBuilder stderrBuf = new StringBuilder();
+        proc.ErrorDataReceived += (s, e) => { if (e.Data != null) stderrBuf.AppendLine(e.Data); };
+        proc.BeginErrorReadLine();
+
+        if (!proc.WaitForExit(15000))
+        {
+            try { proc.Kill(); } catch { }
+            WriteResponse(stream, 504, "text/plain", Encoding.UTF8.GetBytes("FFmpeg timed out (15s)"), true);
+            return;
+        }
+        // The timed overload can return before the last stderr lines arrive.
+        proc.WaitForExit();
+
+        string json = BuildMediaInfoJson(stderrBuf.ToString());
+        if (json == null)
+        {
+            WriteResponse(stream, 502, "text/plain", Encoding.UTF8.GetBytes("Could not read media info"), true);
+            return;
+        }
+        WriteResponse(stream, 200, "application/json", Encoding.UTF8.GetBytes(json), true);
+    }
+
+    // Turns ffmpeg's input dump into the /media-info JSON. Returns null when
+    // the dump describes no media at all (unreachable URL, not a media file).
+    static string BuildMediaInfoJson(string dump)
+    {
+        var inv = CultureInfo.InvariantCulture;
+        string duration = "null";
+        Match dm = Regex.Match(dump, @"Duration: (\d+):(\d+):(\d+(?:\.\d+)?)");
+        if (dm.Success)
+        {
+            double seconds = int.Parse(dm.Groups[1].Value, inv) * 3600
+                + int.Parse(dm.Groups[2].Value, inv) * 60
+                + double.Parse(dm.Groups[3].Value, inv);
+            duration = seconds.ToString("0.###", inv);
+        }
+        if (!dm.Success && dump.IndexOf("Stream #", StringComparison.Ordinal) < 0) return null;
+
+        var sb = new StringBuilder();
+        sb.Append("{\"duration\":").Append(duration).Append(",\"chapters\":[");
+        string[] lines = dump.Split('\n');
+        bool first = true;
+        for (int i = 0; i < lines.Length; i++)
+        {
+            Match cm = Regex.Match(lines[i], @"Chapter #\d+:\d+: start (-?[\d.]+), end (-?[\d.]+)");
+            if (!cm.Success) continue;
+            // The chapter's own metadata follows, up to the next chapter or
+            // the first stream.
+            string title = null;
+            for (int j = i + 1; j < lines.Length; j++)
+            {
+                string t = lines[j].Trim();
+                if (t.StartsWith("Chapter #") || t.StartsWith("Stream #")) break;
+                Match tm = Regex.Match(t, @"^title\s*:\s*(.*)$");
+                if (tm.Success) { title = tm.Groups[1].Value.Trim(); break; }
+            }
+            if (!first) sb.Append(',');
+            first = false;
+            sb.Append("{\"start\":").Append(double.Parse(cm.Groups[1].Value, inv).ToString("0.###", inv))
+              .Append(",\"end\":").Append(double.Parse(cm.Groups[2].Value, inv).ToString("0.###", inv))
+              .Append(",\"title\":");
+            if (title == null) sb.Append("null");
+            else sb.Append('"').Append(JsonEscape(title)).Append('"');
+            sb.Append('}');
+        }
+        sb.Append("]}");
+        return sb.ToString();
     }
 
     // Red-coloured error line. Shared by extract + (could-be-shared by other
