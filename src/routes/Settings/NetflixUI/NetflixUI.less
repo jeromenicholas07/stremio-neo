@@ -194,6 +194,74 @@
     }
 }
 
+.toggle-on:disabled,
+.toggle-off:disabled {
+    cursor: not-allowed;
+}
+
+// ─── Control with its description underneath ───
+.stack {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.6rem;
+    width: 100%;
+}
+
+// ─── Segmented control (one of a few choices) ───
+.segmented {
+    display: flex;
+    width: 100%;
+    padding: 0.2rem;
+    gap: 0.2rem;
+    border-radius: 0.45rem;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    background-color: rgba(255, 255, 255, 0.04);
+}
+
+.segment,
+.segment-on {
+    flex: 1 1 0;
+    min-width: 0;
+    height: 2.3rem;
+    padding: 0 0.6rem;
+    border: none;
+    border-radius: 0.3rem;
+    font-size: 0.8rem;
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    cursor: pointer;
+    transition: background-color 0.15s ease, color 0.15s ease;
+
+    &:focus-visible {
+        outline: 2px solid #7b8fff;
+        outline-offset: 1px;
+    }
+}
+
+.segment {
+    background-color: transparent;
+    color: rgba(255, 255, 255, 0.45);
+
+    &:hover {
+        background-color: rgba(255, 255, 255, 0.06);
+        color: rgba(255, 255, 255, 0.75);
+    }
+}
+
+.segment-on {
+    background-color: rgba(70, 211, 105, 0.14);
+    color: #46d369;
+    box-shadow: inset 0 0 0 1px rgba(70, 211, 105, 0.35);
+}
+
+// ─── An option that does nothing in the current setup ───
+.option-inactive {
+    opacity: 0.4;
+}
+
 // ─── Option description text ───
 .option-desc {
     flex: 1;
