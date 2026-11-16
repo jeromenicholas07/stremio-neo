@@ -5,8 +5,24 @@ const EXTRACT_SERVER_URL = 'http://127.0.0.1:12471';
 function fetchWithTimeout(url, opts, timeoutMs) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs || FETCH_TIMEOUT_MS);
+    // A caller's own signal (opts.signal) cancels the request as well.
+    const outer = opts && opts.signal;
+    const onAbort = () => controller.abort();
+    if (outer) {
+        if (outer.aborted) controller.abort();
+        else outer.addEventListener('abort', onAbort);
+    }
     const merged = { ...opts, signal: controller.signal };
-    return fetch(url, merged).finally(() => clearTimeout(timer));
+    return fetch(url, merged).finally(() => {
+        clearTimeout(timer);
+        if (outer) outer.removeEventListener('abort', onAbort);
+    });
+}
+
+function abortError() {
+    const err = new Error('Aborted');
+    err.name = 'AbortError';
+    return err;
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -33,8 +49,10 @@ async function checkExtractServer() {
  * @param {number} startSec  — start offset in seconds
  * @param {number} durationSec — chunk duration in seconds
  * @param {string|null} headers — optional HTTP headers for FFmpeg (debrid auth etc.)
+ * @param {string} [mix] — 'full' for a plain all-channel downmix
+ * @param {AbortSignal} [signal] — cancels the request
  */
-async function extractChunkDirect(mediaUrl, startSec, durationSec, headers) {
+async function extractChunkDirect(mediaUrl, startSec, durationSec, headers, mix, signal) {
     const params = new URLSearchParams({
         mediaURL: mediaUrl,
         start: String(startSec),
@@ -42,6 +60,11 @@ async function extractChunkDirect(mediaUrl, startSec, durationSec, headers) {
     });
     if (headers) {
         params.set('headers', headers);
+    }
+    // 'full': a plain all-channel downmix instead of the dialogue-focused one.
+    // Only the dev sidecar distinguishes; the launcher always returns the plain mix.
+    if (mix) {
+        params.set('mix', mix);
     }
     const url = `${EXTRACT_SERVER_URL}/audio-extract?${params}`;
 
@@ -51,7 +74,7 @@ async function extractChunkDirect(mediaUrl, startSec, durationSec, headers) {
     let lastErr = null;
     for (let attempt = 0; attempt < 2; attempt++) {
         try {
-            const resp = await fetchWithTimeout(url, {}, 60000);
+            const resp = await fetchWithTimeout(url, { signal }, 60000);
             if (!resp.ok) {
                 const body = await resp.text().catch(function () { return ''; });
                 throw new Error('Extract failed (' + resp.status + '): ' + body.substring(0, 200));
@@ -68,6 +91,7 @@ async function extractChunkDirect(mediaUrl, startSec, durationSec, headers) {
                 duration: durationSec,
             };
         } catch (err) {
+            if (signal && signal.aborted) throw abortError();
             lastErr = err;
             if (attempt === 0) {
                 await new Promise(function (r) { setTimeout(r, 500); });
@@ -78,39 +102,45 @@ async function extractChunkDirect(mediaUrl, startSec, durationSec, headers) {
 }
 
 /**
- * Extract multiple chunks in parallel. Per-chunk failures are tolerated:
- * the returned array contains successful results only (in original order),
- * and the batch as a whole succeeds as long as at least one chunk did.
+ * Start extracting every chunk at once, at most `lanes` at a time, and hand
+ * back one promise per chunk in the same order, so the caller can use each
+ * as soon as it lands and stop early.
  *
- * Each entry: { start: seconds, duration: seconds }
+ * On a debrid stream nearly all the time of a short read is fixed (ffmpeg
+ * makes about six requests to open, probe and seek, ~0.9 s each), and
+ * parallel reads overlap almost completely: eight 5 s chunks take ~6 s read
+ * together against ~20 s in batches of three. Aborting `signal` cancels
+ * reads in flight and the ones not started yet.
+ *
+ * @returns {Promise[]} rejects per chunk on failure or abort
  */
-async function extractBatch(mediaUrl, chunks, headers) {
-    const settled = await Promise.allSettled(
-        chunks.map(function (c) {
-            return extractChunkDirect(mediaUrl, c.start, c.duration, headers);
-        }),
-    );
-    const successes = [];
-    const failures = [];
-    for (let i = 0; i < settled.length; i++) {
-        const r = settled[i];
-        if (r.status === 'fulfilled') {
-            successes.push(r.value);
+function extractEach(mediaUrl, chunks, headers, options) {
+    const lanes = Math.max(1, (options && options.lanes) || chunks.length);
+    const signal = options && options.signal;
+    let running = 0;
+    const waiting = [];
+    const release = () => {
+        running--;
+        const next = waiting.shift();
+        if (next) next();
+    };
+    const slot = () => new Promise(function (resolve) {
+        if (running < lanes) {
+            running++;
+            resolve();
         } else {
-            failures.push({ chunk: chunks[i], reason: r.reason });
+            waiting.push(function () { running++; resolve(); });
         }
-    }
-    if (successes.length === 0) {
-        const firstReason = failures.length > 0 ? failures[0].reason : new Error('No chunks extracted');
-        const msg = firstReason && firstReason.message ? firstReason.message : String(firstReason);
-        throw new Error('All chunk extractions failed: ' + msg);
-    }
-    if (failures.length > 0) {
-        // eslint-disable-next-line no-console
-        console.warn('[WhisperSync] extractBatch: ' + failures.length + '/' + chunks.length + ' chunks failed —',
-            failures.map(function (f) { return '@' + f.chunk.start + 's: ' + (f.reason && f.reason.message || f.reason); }).join('; '));
-    }
-    return successes;
+    });
+    return chunks.map(async function (c) {
+        await slot();
+        try {
+            if (signal && signal.aborted) throw abortError();
+            return await extractChunkDirect(mediaUrl, c.start, c.duration, headers, null, signal);
+        } finally {
+            release();
+        }
+    });
 }
 
 /**
@@ -502,7 +532,7 @@ module.exports = {
     // Direct extraction (primary)
     checkExtractServer,
     extractChunkDirect,
-    extractBatch,
+    extractEach,
     resolveMediaUrl,
     // HLS extraction (fallback)
     createAudioSession,

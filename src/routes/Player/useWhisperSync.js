@@ -1,7 +1,7 @@
 const React = require('react');
 const {
     checkExtractServer,
-    extractBatch,
+    extractEach,
     resolveMediaUrl,
     createAudioSession,
 } = require('stremio/services/subtitleSync/audioExtractor');
@@ -29,8 +29,13 @@ const SYNC_STATUS = {
 
 const CHUNK_DURATION = 5;           // seconds per chunk (was 15)
 const MAX_CHUNK_ATTEMPTS = 16;      // max chunks to try (auto-sync, a long movie)
-const BATCH_SIZE = 3;               // parallel fetches per batch (auto-sync)
-const MANUAL_CHUNK_ATTEMPTS = 2;    // manual sync: 1 batch of 2 near current time
+// Chunk reads in flight at once. Eight 5 s reads of a debrid stream finish in
+// ~6 s together, against ~20 s in batches of three; past eight, a long movie's
+// extra chunks queue behind them.
+const READ_LANES = 8;
+// Manual sync: chunks near the current time, read together. A sync is only
+// applied once three distinct chunks agree, so two could never confirm one.
+const MANUAL_CHUNK_ATTEMPTS = 4;
 const MAX_RETRIES = 3;              // full pipeline retries (HLS fallback only)
 
 // Floor for the auto-sync budget: what a ~45min episode has always used.
@@ -77,6 +82,8 @@ const useWhisperSync = (extraSubtitlesTracks, selectedExtraSubtitlesTrackId, set
 
     const workerRef = React.useRef(null);
     const cancelledRef = React.useRef(false);
+    // The chunk reads of the sync in progress, cancelled with it.
+    const readsRef = React.useRef(null);
     const prevTrackIdRef = React.useRef(null);
 
     const getSelectedTrack = React.useCallback(() => {
@@ -240,7 +247,7 @@ const useWhisperSync = (extraSubtitlesTracks, selectedExtraSubtitlesTrackId, set
     }, [setSubtitlesDelay, collectSamples]);
 
     // ══════════════════════════════════════════════════════════════
-    //  Direct extraction path — batch-of-3, parallel fetch, fast
+    //  Direct extraction path — all chunks read in parallel, fast
     // ══════════════════════════════════════════════════════════════
 
     const runDirectSync = React.useCallback(async (cues, focusTimeSec) => {
@@ -259,14 +266,13 @@ const useWhisperSync = (extraSubtitlesTracks, selectedExtraSubtitlesTrackId, set
             '| extract via:', resolved.hlsUrl ? 'HLS transcoder' : 'direct proxy');
 
         // Manual sync (focusTimeSec set): pick densest chunks WITHIN a window
-        // around the current playback time. Only 2 chunks in 1 batch — fast,
+        // around the current playback time. Only 4 chunks, read together — fast,
         // deterministic, and uses the same density quality signal as auto-sync.
         //
         // Auto-sync (no focusTimeSec): density-ranked chunks across the whole
-        // episode (up to 8 chunks, 3 per batch).
+        // episode (8-16 chunks by runtime, all read at once).
         const isManual = focusTimeSec != null;
         const chunkLimit = isManual ? MANUAL_CHUNK_ATTEMPTS : resolveAutoBudget(cues);
-        const batchSize = isManual ? MANUAL_CHUNK_ATTEMPTS : BATCH_SIZE;
 
         const chunkOffsets = isManual
             ? findChunkOffsetsNearTime(cues, CHUNK_DURATION, chunkLimit, focusTimeSec)
@@ -277,11 +283,20 @@ const useWhisperSync = (extraSubtitlesTracks, selectedExtraSubtitlesTrackId, set
             isManual ? 'focused @' + Math.round(focusTimeSec) + 's (' + chunkLimit + ' chunks)' : 'density-ranked',
             '| offsets:', chunkOffsets.map(function (o) { return o + 's'; }).join(', '));
 
-        // Split into batches
-        const batches = [];
-        for (let i = 0; i < chunkOffsets.length; i += batchSize) {
-            batches.push(chunkOffsets.slice(i, i + batchSize));
-        }
+        // Read every chunk at once (see extractEach) and use each as it lands,
+        // in rank order. Reads still in flight are cancelled once the answer
+        // is clear, so the early stop saves the time but not every download.
+        setSyncStatus(SYNC_STATUS.EXTRACTING);
+        const reads = new AbortController();
+        readsRef.current = reads;
+        const pending = extractEach(
+            extractUrl,
+            chunkOffsets.map(function (offset) { return { start: offset, duration: CHUNK_DURATION }; }),
+            mediaHeaders,
+            { lanes: READ_LANES, signal: reads.signal },
+        );
+        // A read that is cancelled before it is used is not an error.
+        pending.forEach(function (read) { read.catch(function () { return null; }); });
 
         // Create worker once — model stays loaded across all chunks
         const worker = createWorker();
@@ -289,44 +304,23 @@ const useWhisperSync = (extraSubtitlesTracks, selectedExtraSubtitlesTrackId, set
         // Retained so the refine pass can re-match without re-transcribing.
         const transcripts = [];
         let totalChunksProcessed = 0;
+        let lastFailure = null;
 
-        for (let batchIdx = 0; batchIdx < batches.length; batchIdx++) {
-            if (cancelledRef.current) return;
-
-            const batch = batches[batchIdx];
-            const batchChunks = batch.map(function (offset) {
-                return { start: offset, duration: CHUNK_DURATION };
-            });
-
-            // ── Parallel fetch: all chunks in this batch at once ──
-            setSyncStatus(SYNC_STATUS.EXTRACTING);
-            // eslint-disable-next-line no-console
-            console.log(
-                '[WhisperSync] Batch', batchIdx + 1, '/', batches.length,
-                '— extracting', batchChunks.length, 'chunks at offsets:',
-                batch.map(function (o) { return o + 's'; }).join(', '),
-            );
-            let audioResults;
-            try {
-                audioResults = await extractBatch(extractUrl, batchChunks, mediaHeaders);
-            } catch (err) {
-                if (cancelledRef.current) return;
-                // Whole batch failed. If we already collected matches from
-                // earlier batches, prefer applying those over throwing — losing
-                // work just because a later batch dies is worse than a partial
-                // sync. If nothing has worked yet, propagate so HLS fallback runs.
-                // eslint-disable-next-line no-console
-                console.warn('[WhisperSync] Batch', batchIdx + 1, 'failed:', err && err.message);
-                if (allSamples.length === 0) throw err;
-                break;
-            }
-            if (cancelledRef.current) return;
-
-            // ── Sequential transcribe + align per chunk ──
-            for (let i = 0; i < audioResults.length; i++) {
+        try {
+            for (let i = 0; i < pending.length; i++) {
                 if (cancelledRef.current) return;
 
-                const audioData = audioResults[i];
+                let audioData;
+                try {
+                    audioData = await pending[i];
+                } catch (err) {
+                    if (cancelledRef.current) return;
+                    lastFailure = err;
+                    console.warn('[WhisperSync] Chunk @' + chunkOffsets[i] + 's failed:', err && err.message);
+                    continue;
+                }
+                if (cancelledRef.current) return;
+
                 const transcription = await transcribeAudio(worker, audioData);
                 if (cancelledRef.current) return;
 
@@ -341,35 +335,47 @@ const useWhisperSync = (extraSubtitlesTracks, selectedExtraSubtitlesTrackId, set
                     '[WhisperSync]   Chunk', totalChunksProcessed, '(@' + audioData.startTime + 's):',
                     samples.length, 'matches — total:', allSamples.length,
                 );
-            }
 
-            // ── Early stop: enough *agreeing* matches, from enough places? ──
-            // Don't stop on raw count alone — a few outlier matches with no
-            // consensus would produce a wrong sync. And don't stop on cluster
-            // size alone either: one 5s chunk emits several whisper segments,
-            // so a single mis-matched window can hit the cluster threshold by
-            // itself. isConfident also requires agreement across distinct
-            // chunks, which the dispersed chunk ordering makes meaningful —
-            // they are different regions of the film, not neighbours.
-            const early = consensusOffset(allSamples);
-            if (isConfident(early)) {
-                // eslint-disable-next-line no-console
-                console.log('[WhisperSync] Consensus reached after', totalChunksProcessed, 'chunks (',
-                    early.cluster.length, 'agreeing across', early.sourceCount, 'chunks /',
-                    allSamples.length, 'total)');
-                finalize(allSamples, transcripts, cues, totalChunksProcessed);
-                return;
+                // ── Early stop: enough *agreeing* matches, from enough places? ──
+                // Don't stop on raw count alone — a few outlier matches with no
+                // consensus would produce a wrong sync. And don't stop on cluster
+                // size alone either: one 5s chunk emits several whisper segments,
+                // so a single mis-matched window can hit the cluster threshold by
+                // itself. isConfident also requires agreement across distinct
+                // chunks, which the dispersed chunk ordering makes meaningful —
+                // they are different regions of the film, not neighbours.
+                const early = consensusOffset(allSamples);
+                if (isConfident(early)) {
+                    // eslint-disable-next-line no-console
+                    console.log('[WhisperSync] Consensus reached after', totalChunksProcessed, 'chunks (',
+                        early.cluster.length, 'agreeing across', early.sourceCount, 'chunks /',
+                        allSamples.length, 'total)');
+                    finalize(allSamples, transcripts, cues, totalChunksProcessed);
+                    return;
+                }
             }
+        } finally {
+            reads.abort();
+            if (readsRef.current === reads) readsRef.current = null;
         }
 
-        // All batches exhausted
-        if (allSamples.length > 0) {
-            // eslint-disable-next-line no-console
-            console.log('[WhisperSync] Low confidence — applying best effort with', allSamples.length, 'matches');
-            finalize(allSamples, transcripts, cues, totalChunksProcessed);
-        } else {
-            throw new Error('No matches found. Subtitle language may not match audio.');
+        // Nothing could be read: let the HLS fallback try.
+        if (totalChunksProcessed === 0) {
+            throw new Error('All chunk extractions failed: ' + (lastFailure && lastFailure.message || 'no chunks'));
         }
+        // Every chunk was read and used, and the matches never agreed. Leave
+        // the subtitles where they are. An unconfirmed best guess moved them
+        // two minutes on a documentary with little speech (Planet Earth II),
+        // far worse than no sync. The HLS path would only read the same
+        // audio again, more slowly, so it is not tried.
+        const best = consensusOffset(allSamples);
+        // eslint-disable-next-line no-console
+        console.log('[WhisperSync] Not confirmed — subtitles left as they are (' + best.cluster.length +
+            ' matches from ' + best.sourceCount + ' chunks, ' + allSamples.length + ' total)');
+        setSyncError(allSamples.length === 0
+            ? 'No speech matched the subtitles'
+            : 'Could not confirm a sync; subtitles unchanged');
+        setSyncStatus(SYNC_STATUS.ERROR);
     }, [streamingServerUrl, streamContent, createWorker, transcribeAudio, collectSamples, finalize, resolveAutoBudget]);
 
     // ══════════════════════════════════════════════════════════════
@@ -479,7 +485,7 @@ const useWhisperSync = (extraSubtitlesTracks, selectedExtraSubtitlesTrackId, set
             // Tokenize once up-front so every chunk's match step is O(N) cheap.
             indexCues(cues);
 
-            // Prefer direct FFmpeg extraction (fast, seekable, parallel batches)
+            // Prefer direct FFmpeg extraction (fast, seekable, parallel reads)
             const directAvailable = await checkExtractServer();
 
             if (directAvailable) {
@@ -517,6 +523,7 @@ const useWhisperSync = (extraSubtitlesTracks, selectedExtraSubtitlesTrackId, set
 
     const cancelSync = React.useCallback(() => {
         cancelledRef.current = true;
+        if (readsRef.current) readsRef.current.abort();
         if (workerRef.current) {
             workerRef.current.terminate();
             workerRef.current = null;
@@ -555,6 +562,7 @@ const useWhisperSync = (extraSubtitlesTracks, selectedExtraSubtitlesTrackId, set
     React.useEffect(() => {
         return () => {
             cancelledRef.current = true;
+            if (readsRef.current) readsRef.current.abort();
             if (workerRef.current) {
                 workerRef.current.terminate();
                 workerRef.current = null;
