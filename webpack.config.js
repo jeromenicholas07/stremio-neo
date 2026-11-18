@@ -40,7 +40,8 @@ module.exports = (env, argv) => ({
         main: './src/index.js',
         worker: './node_modules/@stremio/stremio-core-web/worker.js',
         whisperWorker: './src/workers/whisperWorker.js',
-        skipWorker: './src/workers/skipWorker.js'
+        skipWorker: './src/workers/skipWorker.js',
+        creditTextWorker: './src/workers/creditTextWorker.js'
     },
     output: {
         path: path.join(__dirname, 'build'),
@@ -169,6 +170,13 @@ module.exports = (env, argv) => ({
                 }
             },
             {
+                // onnxruntime-web finds its WebAssembly from import.meta.url,
+                // which webpack resolves through `document`, missing in the
+                // credits text worker; it is given an absolute URL instead.
+                test: /onnxruntime-web[\\/]dist[\\/]ort\.webgpu\.bundle\.min\.mjs$/,
+                parser: { url: false },
+            },
+            {
                 test: /\.wasm$/,
                 type: 'asset/resource',
                 generator: {
@@ -276,6 +284,11 @@ module.exports = (env, argv) => ({
                 { from: 'assets/screenshots/*.webp', to: 'screenshots/[name][ext]' },
                 { from: '.well-known', to: '.well-known' },
                 { from: 'manifest.json', to: 'manifest.json' },
+                // onnxruntime's WebGPU glue script for the credits text worker
+                // (creditTextWorker), next to its binary, which the wasm rule
+                // already puts in binaries/ for WhisperSync (one onnxruntime-web
+                // version in the tree, so the two match).
+                { from: 'node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.jsep.mjs', to: `${COMMIT_HASH}/binaries/[name][ext]` },
             ]
         }),
         new MiniCssExtractPlugin({

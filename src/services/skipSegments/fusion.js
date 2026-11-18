@@ -189,6 +189,17 @@ const CREDITS_REACH = 600; // credits start in the last 10 minutes
 const CREDITS_MIN_SECONDS = 10;
 // How far before the shared music a credit roll seen in the picture may start.
 const PICTURE_BEFORE_CHAIN = 10;
+// The picture is read over the last 8 minutes at most, widened once.
+const PICTURE_REACH = 900;
+// The picture's start is to the frame: only a chapter mark this close moves it.
+const PICTURE_MARK_TOLERANCE = 1.5;
+// Shared music starting this close to the picture's start agrees with it.
+const PICTURE_MUSIC_TOLERANCE = 3;
+// Credits this close in length to those of this many other episodes agree...
+const LEARNED_TOLERANCE = 2;
+const LEARNED_EPISODES = 2;
+// ...and stands in for one in a file within this much of the same length.
+const LEARNED_SAME_LENGTH = 5;
 
 function fuseCredits(evidence) {
     const type = 'credits';
@@ -200,53 +211,71 @@ function fuseCredits(evidence) {
     const databases = (evidence.database ? evidence.database.segments : [])
         .filter((entry) => entry.type === type && plausible(type, entry, duration));
 
-    const strong = (evidence.creditsRepetition || [])
-        .filter((match) => match.bitErrorRate <= STRONG_BIT_ERROR_RATE)
-        .sort((a, b) => a.start - b.start);
-    if (strong.length > 0 && Number.isFinite(duration)) {
-        const chains = [];
-        for (const match of strong) {
-            const chain = chains[chains.length - 1];
-            if (chain && match.start <= chain.end + CREDITS_CHAIN_GAP) {
-                chain.end = Math.max(chain.end, match.end);
-                chain.matches.push(match);
-            } else {
-                chains.push({ start: match.start, end: match.end, matches: [match] });
-            }
-        }
-        const chain = chains.reverse().find((candidate) => candidate.end >= duration - CREDITS_TAIL_MAX
-            && candidate.start >= duration - CREDITS_REACH && candidate.end - candidate.start >= CREDITS_MIN_SECONDS);
-        if (chain) {
-            const support = chain.matches
-                .filter((match) => Math.abs(match.start - chain.start) <= START_TOLERANCE)
-                .reduce((sum, match) => sum + (match.weight || 1), 0);
-            // The picture's credit roll (creditFrames), when it starts within
-            // the shared music: these are credits, not music over the final
-            // scene, and the roll's first frame is where they start (the music
-            // often begins a moment before the cut).
-            const picture = evidence.creditsPicture && evidence.creditsPicture.roll;
-            const rolled = Boolean(picture) && picture.start >= chain.start - PICTURE_BEFORE_CHAIN && picture.start <= chain.end;
-            const near = rolled ? picture.start : chain.start;
-            const mark = marks.find((time) => Math.abs(time - near) <= MARK_TOLERANCE);
-            const start = mark !== undefined ? mark : near;
-            // Not an entry made on a different cut: its times are for another file.
-            const backing = databases.filter((entry) => entry.sameCut !== false && Math.abs(entry.start - start) <= START_TOLERANCE);
-            const runsOut = chain.end >= duration - CREDITS_TO_END;
-            // Other episodes sharing the music only shows it recurs: closing
-            // music can start over the final scene. Advancing on its own needs
-            // something that knows where the credits are: the picture, a
-            // database, a chapter boundary, or the season's credits theme,
-            // itself confirmed one of those ways.
-            const themed = chain.matches.some((match) => (match.weight || 1) >= 2 && Math.abs(match.start - chain.start) <= START_TOLERANCE);
-            const placed = rolled || backing.length > 0 || mark !== undefined || themed;
-            return {
-                type,
-                start,
-                end: runsOut ? duration : chain.end,
-                confidence: runsOut && placed ? 'high' : (runsOut || placed || support >= 2 ? 'medium' : 'low'),
-                sources: ['audio', ...(rolled ? ['picture'] : []), ...backing.map((entry) => entry.source), ...(mark !== undefined ? ['chapter-mark'] : [])],
-            };
-        }
+    const chain = creditsChain(evidence);
+
+    // The credits seen in the picture (creditText, creditFrames): their first
+    // card is where the credits start, whatever the music does. Advancing on
+    // its own needs it to run out the file and something else to agree on
+    // the start, unless it is a roll on black that the strict test is sure of.
+    const run = evidence.creditsPicture && evidence.creditsPicture.run;
+    if (run && Number.isFinite(duration) && run.start >= duration - PICTURE_REACH && run.start < duration - CREDITS_MIN_SECONDS) {
+        const mark = marks.find((time) => Math.abs(time - run.start) <= PICTURE_MARK_TOLERANCE);
+        const start = mark !== undefined ? mark : run.start;
+        // The shared music agrees only when it starts with the credits: music
+        // that swells over the closing scene would agree with a start taken
+        // from a poster in that scene too.
+        const audio = Boolean(chain) && Math.abs(start - chain.start) <= PICTURE_MUSIC_TOLERANCE;
+        const backing = databases.filter((entry) => entry.sameCut !== false && Math.abs(entry.start - start) <= START_TOLERANCE);
+        // Credits as long as in two other episodes of the season.
+        const learned = (evidence.creditsLengths || [])
+            .filter((sample) => Math.abs(sample.seconds - (duration - start)) <= LEARNED_TOLERANCE).length >= LEARNED_EPISODES;
+        const runsOut = run.runsOut === true || (run.runsOut === null && audio && chain.end >= duration - CREDITS_TO_END);
+        const agreed = audio || backing.length > 0 || mark !== undefined || learned;
+        return {
+            type,
+            start,
+            end: runsOut ? duration : run.end,
+            confidence: runsOut && (agreed || run.solid === true) ? 'high' : 'medium',
+            sources: [
+                'picture',
+                ...(audio ? ['audio'] : []),
+                ...backing.map((entry) => entry.source),
+                ...(mark !== undefined ? ['chapter-mark'] : []),
+                ...(learned ? ['season-length'] : []),
+            ],
+        };
+    }
+
+    if (chain) {
+        const support = chain.matches
+            .filter((match) => Math.abs(match.start - chain.start) <= START_TOLERANCE)
+            .reduce((sum, match) => sum + (match.weight || 1), 0);
+        // The picture's credit roll (creditFrames), when it starts within
+        // the shared music: these are credits, not music over the final
+        // scene, and the roll's first frame is where they start (the music
+        // often begins a moment before the cut).
+        const picture = evidence.creditsPicture && evidence.creditsPicture.roll;
+        const rolled = Boolean(picture) && picture.start >= chain.start - PICTURE_BEFORE_CHAIN && picture.start <= chain.end;
+        const near = rolled ? picture.start : chain.start;
+        const mark = marks.find((time) => Math.abs(time - near) <= MARK_TOLERANCE);
+        const start = mark !== undefined ? mark : near;
+        // Not an entry made on a different cut: its times are for another file.
+        const backing = databases.filter((entry) => entry.sameCut !== false && Math.abs(entry.start - start) <= START_TOLERANCE);
+        const runsOut = chain.end >= duration - CREDITS_TO_END;
+        // Other episodes sharing the music only shows it recurs: closing
+        // music can start over the final scene. Advancing on its own needs
+        // something that knows where the credits are: the picture, a
+        // database, a chapter boundary, or the season's credits theme,
+        // itself confirmed one of those ways.
+        const themed = chain.matches.some((match) => (match.weight || 1) >= 2 && Math.abs(match.start - chain.start) <= START_TOLERANCE);
+        const placed = rolled || backing.length > 0 || mark !== undefined || themed;
+        return {
+            type,
+            start,
+            end: runsOut ? duration : chain.end,
+            confidence: runsOut && placed ? 'high' : (runsOut || placed || support >= 2 ? 'medium' : 'low'),
+            sources: ['audio', ...(rolled ? ['picture'] : []), ...backing.map((entry) => entry.source), ...(mark !== undefined ? ['chapter-mark'] : [])],
+        };
     }
 
     // No shared music (a new song every episode): the picture alone, only
@@ -264,10 +293,42 @@ function fuseCredits(evidence) {
     }
 
     const fromDb = fromDatabases(databases, false);
-    if (!fromDb) return null;
-    const edges = snapToMarks(fromDb, marks);
-    const confidence = fromDb.confidence === 'low' && edges.snapped ? 'medium' : fromDb.confidence;
-    return { type, start: edges.start, end: edges.end, confidence, sources: fromDb.sources };
+    const edges = fromDb ? snapToMarks(fromDb, marks) : null;
+    const dbConfidence = fromDb ? (fromDb.confidence === 'low' && edges.snapped ? 'medium' : fromDb.confidence) : null;
+    if (fromDb && dbConfidence !== 'low') return { type, start: edges.start, end: edges.end, confidence: dbConfidence, sources: fromDb.sources };
+
+    // Nothing measured on this file: the season's credits run about as long
+    // in every episode of the same length, so where they usually start is
+    // worth the popup, never an advance.
+    const length = evidence.creditsLength;
+    if (length && Number.isFinite(duration) && Math.abs(length.duration - duration) <= LEARNED_SAME_LENGTH) {
+        const near = duration - length.seconds;
+        const mark = marks.find((time) => Math.abs(time - near) <= MARK_TOLERANCE);
+        return { type, start: mark !== undefined ? mark : near, end: duration, confidence: 'medium', sources: ['season-length'] };
+    }
+    return fromDb ? { type, start: edges.start, end: edges.end, confidence: dbConfidence, sources: fromDb.sources } : null;
+}
+
+// The chain of music shared with other episodes that runs out the file, if
+// there is one (see fuseCredits).
+function creditsChain(evidence) {
+    const duration = evidence.duration;
+    const strong = (evidence.creditsRepetition || [])
+        .filter((match) => match.bitErrorRate <= STRONG_BIT_ERROR_RATE)
+        .sort((a, b) => a.start - b.start);
+    if (strong.length === 0 || !Number.isFinite(duration)) return null;
+    const chains = [];
+    for (const match of strong) {
+        const chain = chains[chains.length - 1];
+        if (chain && match.start <= chain.end + CREDITS_CHAIN_GAP) {
+            chain.end = Math.max(chain.end, match.end);
+            chain.matches.push(match);
+        } else {
+            chains.push({ start: match.start, end: match.end, matches: [match] });
+        }
+    }
+    return chains.reverse().find((candidate) => candidate.end >= duration - CREDITS_TAIL_MAX
+        && candidate.start >= duration - CREDITS_REACH && candidate.end - candidate.start >= CREDITS_MIN_SECONDS) || null;
 }
 
 /**

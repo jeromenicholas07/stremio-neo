@@ -65,19 +65,30 @@ async function fetchSceneCuts(mediaUrl, start, seconds, signal) {
     }
 }
 
-// Small grey frames of a stretch of the file, from the launcher. Null when it
-// cannot say (an older launcher answers 404).
-async function fetchFrames(mediaUrl, start, seconds, signal) {
+// Grey frames of a stretch of the file, from the launcher: 160x90 at 2 per
+// second unless asked otherwise (up to 640x360 and 4 per second, for the text
+// detector). Null when it cannot say: a read that failed, or an older
+// launcher, which answers 404 or ignores the size and rate (caught by the
+// frame count).
+async function fetchFrames(mediaUrl, start, seconds, signal, options) {
+    const width = (options && options.width) || FRAME_WIDTH;
+    const height = (options && options.height) || FRAME_HEIGHT;
+    const fps = (options && options.fps) || FRAME_RATE;
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), SCENE_TIMEOUT_MS + 20000);
+    // The launcher allows 30 s plus a third of the length; a little more here.
+    const timer = setTimeout(() => controller.abort(), 40000 + seconds * 400);
     const onAbort = () => controller.abort();
     if (signal) signal.addEventListener('abort', onAbort);
     try {
-        const query = `mediaURL=${encodeURIComponent(mediaUrl)}&start=${start.toFixed(3)}&duration=${seconds.toFixed(1)}`;
+        let query = `mediaURL=${encodeURIComponent(mediaUrl)}&start=${start.toFixed(3)}&duration=${seconds.toFixed(1)}`;
+        if (options) query += `&width=${width}&height=${height}&fps=${fps}`;
         const response = await fetch(`${FRAMES_URL}?${query}`, { signal: controller.signal });
         if (!response.ok) return null;
         const data = new Uint8Array(await response.arrayBuffer());
-        return data.length >= FRAME_WIDTH * FRAME_HEIGHT ? { data, start, fps: FRAME_RATE, width: FRAME_WIDTH, height: FRAME_HEIGHT } : null;
+        const size = width * height;
+        const count = data.length / size;
+        if (!Number.isInteger(count) || count < 1 || count > seconds * fps + 2) return null;
+        return { data, start, fps, width, height };
     } catch {
         return null;
     } finally {

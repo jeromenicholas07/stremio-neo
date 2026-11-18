@@ -74,6 +74,9 @@ importers:
       magnet-uri:
         specifier: 6.2.0
         version: 6.2.0
+      onnxruntime-web:
+        specifier: 1.22.0-dev.20250409-89f8206ba4
+        version: 1.22.0-dev.20250409-89f8206ba4
       prop-types:
         specifier: 15.8.1
         version: 15.8.1

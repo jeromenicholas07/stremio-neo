@@ -515,11 +515,9 @@ const Player = ({ urlParams, queryParams }) => {
     React.useEffect(() => {
         if (player.nextVideo !== null && !nextVideoPopupDismissed.current) {
             // Where the credits are known to start, offer the next episode
-            // from there instead of only in the last seconds of the file. With
-            // the popup turned off, it still shows when it is about to play
-            // the next episode on its own.
-            const inCredits = (settings.nextVideoNotificationDuration > 0 || skipSegments.autoNextAt !== null)
-                && skipSegments.creditsStart !== null && video.state.time >= skipSegments.creditsStart;
+            // from there instead of only in the last seconds of the file,
+            // whatever the popup's own timing is set to.
+            const inCredits = skipSegments.creditsStart !== null && video.state.time >= skipSegments.creditsStart;
             if (video.state.time !== null && video.state.duration !== null && video.state.time < video.state.duration && ((video.state.duration - video.state.time) <= settings.nextVideoNotificationDuration || inCredits)) {
                 openNextVideoPopup();
             } else {

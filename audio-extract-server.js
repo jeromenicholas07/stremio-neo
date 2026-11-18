@@ -13,7 +13,8 @@ const { spawn, execFileSync } = require('child_process');
 const path = require('path');
 const os = require('os');
 
-const PORT = 12471;
+// SKIP_SIDECAR_PORT: a second copy beside the launcher, for testing.
+const PORT = Number(process.env.SKIP_SIDECAR_PORT) || 12471;
 
 // ── Find FFmpeg ──
 
@@ -83,6 +84,10 @@ const AUDIO_FILTERS = {
 
 // Which variant a given media URL needs. Probed once, then reused.
 const layoutCache = new Map();
+// NVDEC for /frames: 0 = not tried yet, 1 = works, -1 = could not start.
+let framesCuda = 0;
+// Files found to be 10-bit, read through cuda10 straight away next time.
+const framesTenBit = new Set();
 
 // Asking `pan` for FC on a stereo source does NOT fail — it returns a
 // perfectly valid buffer of pure silence, exit code 0. So the layout has to
@@ -244,55 +249,88 @@ http.createServer((req, res) => {
         return;
     }
 
-    // ── Small grey frames from an episode's end (Skip Intro's credit roll) ──
+    // ── Grey frames from an episode's end (Skip Intro's credits) ──
+    // Same contract as the launcher's /frames: width/height up to 640x360,
+    // fps up to 4, up to 360 s; NVDEC first (nv12, then p010 for 10-bit),
+    // software on two threads when the GPU path cannot take the file.
     if (url.pathname === '/frames') {
         const mediaURL = url.searchParams.get('mediaURL');
         const start = Math.max(0, Number(url.searchParams.get('start')) || 0);
-        const duration = Math.min(120, Math.max(1, Number(url.searchParams.get('duration')) || 60));
+        const duration = Math.min(360, Math.max(1, Number(url.searchParams.get('duration')) || 60));
+        const fps = Math.min(4, Math.max(0.25, Number(url.searchParams.get('fps')) || 2));
+        const width = Math.min(640, Math.max(32, Math.round(Number(url.searchParams.get('width')) || 160))) & ~1;
+        const height = Math.min(360, Math.max(18, Math.round(Number(url.searchParams.get('height')) || 90))) & ~1;
         if (!mediaURL) {
             res.writeHead(400, { ...CORS, 'Content-Type': 'text/plain' });
             return res.end('Missing mediaURL parameter');
         }
         const headers = url.searchParams.get('headers');
-        // One thread, below normal priority, no hardware decoding: it runs
-        // alongside playback. Deblocking is invisible at this size.
-        const args = ['-hide_banner', '-nostats', '-loglevel', 'error', '-threads', '1', '-skip_loop_filter', 'all'];
-        if (headers) args.push('-headers', headers + '\r\n');
-        args.push('-seekable', '1', '-reconnect', '1', '-reconnect_streamed', '1', '-reconnect_delay_max', '3', '-rw_timeout', '8000000',
-            '-ss', String(start), '-i', mediaURL, '-t', String(duration), '-an', '-sn',
-            '-vf', 'fps=2,scale=160:90:flags=area,format=gray', '-filter_threads', '1', '-f', 'rawvideo', '-pix_fmt', 'gray', 'pipe:1');
-        const ffmpeg = spawn(ffmpegPath, args, { stdio: ['ignore', 'pipe', 'ignore'] });
-        try { os.setPriority(ffmpeg.pid, os.constants.priority.PRIORITY_BELOW_NORMAL); } catch { /* already gone */ }
-        res.on('close', () => {
-            if (!res.writableFinished && ffmpeg.exitCode === null) ffmpeg.kill('SIGKILL');
+        const timeoutMs = 30000 + duration * 330;
+        const argsFor = (mode) => {
+            const args = ['-hide_banner', '-nostats', '-loglevel', 'error'];
+            if (mode === 'software') args.push('-threads', '2', '-skip_loop_filter', 'all');
+            else args.push('-hwaccel', 'cuda', '-hwaccel_output_format', 'cuda');
+            if (headers) args.push('-headers', headers + '\r\n');
+            args.push('-seekable', '1', '-reconnect', '1', '-reconnect_streamed', '1', '-reconnect_delay_max', '3', '-rw_timeout', '8000000',
+                '-ss', String(start), '-i', mediaURL, '-t', String(duration), '-an', '-sn', '-dn');
+            const vf = mode === 'software'
+                ? `fps=${fps},scale=${width}:${height}:flags=area,format=gray`
+                : `fps=${fps},scale_cuda=${width}:${height},hwdownload,format=${mode === 'cuda10' ? 'p010le' : 'nv12'},format=gray`;
+            args.push('-vf', vf, '-f', 'rawvideo', '-pix_fmt', 'gray', 'pipe:1');
+            return args;
+        };
+        const runOnce = (mode) => new Promise((resolve) => {
+            const ffmpeg = spawn(ffmpegPath, argsFor(mode), { stdio: ['ignore', 'pipe', 'pipe'] });
+            try { os.setPriority(ffmpeg.pid, os.constants.priority.PRIORITY_BELOW_NORMAL); } catch { /* already gone */ }
+            const onClose = () => {
+                if (!res.writableFinished && ffmpeg.exitCode === null) ffmpeg.kill('SIGKILL');
+            };
+            res.on('close', onClose);
+            const chunks = [];
+            let error = '';
+            let timedOut = false;
+            ffmpeg.stdout.on('data', (chunk) => chunks.push(chunk));
+            ffmpeg.stderr.on('data', (chunk) => { if (error.length < 2000) error += chunk; });
+            const timeout = setTimeout(() => { timedOut = true; ffmpeg.kill('SIGKILL'); }, timeoutMs);
+            const done = () => {
+                clearTimeout(timeout);
+                res.off('close', onClose);
+                resolve({ frames: Buffer.concat(chunks), error, timedOut });
+            };
+            ffmpeg.on('close', done);
+            ffmpeg.on('error', (err) => { error += err.message; done(); });
         });
-        const chunks = [];
-        ffmpeg.stdout.on('data', (chunk) => chunks.push(chunk));
-        const timeout = setTimeout(() => {
-            ffmpeg.kill('SIGKILL');
-            if (!res.headersSent) {
-                res.writeHead(504, { ...CORS, 'Content-Type': 'text/plain' });
-                res.end('FFmpeg timed out (45s)');
+        (async () => {
+            const modes = framesCuda < 0 ? ['software'] : framesTenBit.has(mediaURL) ? ['cuda10', 'software'] : ['cuda', 'cuda10', 'software'];
+            for (let i = 0; i < modes.length; i++) {
+                const mode = modes[i];
+                const { frames, error, timedOut } = await runOnce(mode);
+                if (res.destroyed) return;
+                if (timedOut) {
+                    res.writeHead(504, { ...CORS, 'Content-Type': 'text/plain' });
+                    return res.end('FFmpeg timed out');
+                }
+                if (frames.length > 0) {
+                    if (mode !== 'software') framesCuda = 1;
+                    res.writeHead(200, { ...CORS, 'Content-Type': 'application/octet-stream' });
+                    return res.end(frames);
+                }
+                if (mode === 'software') break;
+                console.warn(`[Frames] ${mode} decode failed, trying the next one: ${error.split('\n')[0]}`);
+                if (mode === 'cuda' && /hwframe download/i.test(error)) {
+                    if (framesTenBit.size > 64) framesTenBit.clear();
+                    framesTenBit.add(mediaURL);
+                    continue;
+                }
+                if (mode === 'cuda') {
+                    if (framesCuda === 0 && /(cuda|cuvid|nvdec|hwaccel|Device creation failed|No device available)/i.test(error)) framesCuda = -1;
+                    modes.splice(modes.indexOf('cuda10'), 1);
+                    if (/(HTTP error|Server returned|Connection refused|Connection timed out|Invalid data found|No such file)/i.test(error)) break;
+                }
             }
-        }, 45000);
-        ffmpeg.on('close', () => {
-            clearTimeout(timeout);
-            if (res.headersSent) return;
-            const frames = Buffer.concat(chunks);
-            if (frames.length === 0) {
-                res.writeHead(502, { ...CORS, 'Content-Type': 'text/plain' });
-                return res.end('Could not read the video');
-            }
-            res.writeHead(200, { ...CORS, 'Content-Type': 'application/octet-stream' });
-            res.end(frames);
-        });
-        ffmpeg.on('error', (err) => {
-            clearTimeout(timeout);
-            if (!res.headersSent) {
-                res.writeHead(500, { ...CORS, 'Content-Type': 'text/plain' });
-                res.end(`FFmpeg spawn error: ${err.message}`);
-            }
-        });
+            res.writeHead(502, { ...CORS, 'Content-Type': 'text/plain' });
+            res.end('Could not read the video');
+        })();
         return;
     }
 

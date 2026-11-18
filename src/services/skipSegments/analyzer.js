@@ -12,8 +12,8 @@ const { FRAMES_PER_SECOND } = require('./fingerprint');
 const compute = require('./compute');
 const store = require('./store');
 const { lookupDatabases } = require('./databases');
-const { fetchChapters, fetchSceneCuts, fetchFrames } = require('./chapters');
-const { findCreditRoll, findClosingRoll } = require('./creditFrames');
+const { fetchChapters, fetchSceneCuts } = require('./chapters');
+const { findPictureCredits } = require('./creditsPicture');
 const { fuse, landingAfter, STRONG_BIT_ERROR_RATE } = require('./fusion');
 const { getSkipSettings } = require('./settings');
 const { fileKeyOf, orderNeighbours, episodesAhead, fetchEpisodeStreams, pickReferenceStreams, isReadable, sizeOf } = require('./neighbours');
@@ -320,12 +320,20 @@ function fuseForPlayback(evidence) {
         end: match.end + shift,
         ...(typeof match.rawStart === 'number' ? { rawStart: Math.max(0, match.rawStart + shift) } : {}),
     }));
-    const segments = fuse({ ...evidence, repetition: moved(evidence.repetition), creditsRepetition: moved(evidence.creditsRepetition) });
-    if (!evidence.standIn) return segments;
+    const run = evidence.creditsPicture && evidence.creditsPicture.run;
+    const creditsPicture = run && (evidence.standIn || evidence.creditsStandIn)
+        ? { ...evidence.creditsPicture, run: { ...run, start: run.start + shift, end: run.end + shift } }
+        : evidence.creditsPicture;
+    const segments = fuse({ ...evidence, repetition: moved(evidence.repetition), creditsRepetition: moved(evidence.creditsRepetition), creditsPicture });
+    if (!evidence.standIn && !evidence.creditsStandIn) return segments;
     // Credits from a stand-in never advance on their own: the offset was
     // measured at the intro, and releases can differ further in.
-    return segments.map((segment) => (segment.confidence === 'high' && segment.sources.includes('audio')
-        && (evidence.offset === null || segment.type === 'credits') ? { ...segment, confidence: 'medium' } : segment));
+    return segments.map((segment) => {
+        const lowered = segment.type === 'credits'
+            ? segment.confidence === 'high' && !segment.sources.includes('chapter')
+            : segment.confidence === 'high' && segment.sources.includes('audio') && evidence.offset === null;
+        return lowered ? { ...segment, confidence: 'medium' } : segment;
+    });
 }
 
 // ── The episode being played ────────────────────────────────────────────────
@@ -547,17 +555,32 @@ const asCredits = (fingerprint, match, weight, end) => ({
 
 // The last `seconds` of a file, kept like the opening ones (as "<videoId>#end")
 // so an episode prepared ahead is not read again when it plays.
-async function endFingerprint(url, duration, seconds, token, videoId, fileKey) {
+async function endFingerprint(url, duration, seconds, token, videoId, fileKey, previous) {
     const to = Math.floor(duration);
     const from = Math.max(0, to - seconds);
     const key = `${videoId}#end`;
-    const stored = await store.getFingerprint(key, fileKey);
     // The player's duration and ffmpeg's can differ by a second.
-    if (stored && Math.abs(stored.to - to) <= 2 && stored.from <= from + 2) return stored;
-    const fingerprint = await fingerprintRange(url, from, to, token, { parallel: 2 });
-    if (!fingerprint || !hasAudio(fingerprint)) return null;
-    const end = { ...fingerprint, fileKey, from, to, seconds: to - from };
-    if (fingerprint.complete) await store.setFingerprint(key, end);
+    const usable = (fingerprint) => fingerprint && Math.abs(fingerprint.to - to) <= 2;
+    const stored = usable(previous) ? previous : await store.getFingerprint(key, fileKey);
+    if (usable(stored) && stored.from <= from + 2) return stored;
+    // A shorter end already read is extended, not read again.
+    const known = usable(stored) && stored.from > from ? stored : null;
+    const added = await fingerprintRange(url, from, known ? known.from : to, token, { parallel: 2 });
+    if (!added) return null;
+    let fingerprint = added;
+    if (known) {
+        const head = added.hashes.length;
+        const hashes = new Int32Array(head + known.hashes.length);
+        const valid = new Uint8Array(head + known.valid.length);
+        hashes.set(added.hashes);
+        hashes.set(known.hashes, head);
+        valid.set(added.valid);
+        valid.set(known.valid, head);
+        fingerprint = { hashes, valid, complete: added.complete && known.complete !== false };
+    }
+    if (!hasAudio(fingerprint)) return null;
+    const end = { ...fingerprint, fileKey, from, to: known ? known.to : to, seconds: (known ? known.to : to) - from };
+    if (end.complete) await store.setFingerprint(key, end);
     return end;
 }
 
@@ -586,101 +609,137 @@ async function creditsFromTheme(played, duration, theme) {
     return asCredits(played, match, theme.confirmed ? 2 : 1, theme.confirmed && whole && sameTail ? duration : undefined);
 }
 
-// The picture at the shared music's start: a credit roll there makes the
-// credits certain enough to advance on, and gives their first frame. Read
-// from a little before the music to well after it (credits can follow the
-// music's start by half a minute), only when nothing else has confirmed the
-// credits, never for a stand-in (its credits do not advance anyway), and not
-// again for a season whose credits run over footage.
-const PICTURE_BEFORE = 20;
-const PICTURE_AFTER = 90;
-const PICTURE_ROLL_FROM = 10;
-const PICTURE_MISS_LIMIT = 2;
+// The picture decides where the credits start (creditsPicture): over the
+// stretch the shared music points at, else from where the season's credits
+// usually start, else over the last eight minutes. A heavy file is only read
+// near the end, it costs gigabytes otherwise.
+const PICTURE_BEFORE_MUSIC = 60;
+const PICTURE_AFTER_MUSIC = 90;
+const PICTURE_BEFORE_LEARNED = 90;
+const PICTURE_SECONDS = 480;
+const PICTURE_HEAVY_SECONDS = 150;
+// Seasons where the picture showed nothing this many times are not read for
+// it again for a while (credits the detector cannot see, or none at all).
+const PICTURE_MISS_LIMIT = 3;
 
-async function pictureOfCredits(job, mediaUrl, duration, token, evidence, credits) {
-    if (credits.confidence === 'high') return;
-    if ((await store.getPictureMisses(job.metaId, job.season)) >= PICTURE_MISS_LIMIT) return;
-    const from = Math.max(0, credits.start - PICTURE_BEFORE);
-    const to = Math.min(duration, credits.start + PICTURE_AFTER);
-    if (to - from < 20) return;
-    const frames = await withRead(token, (signal) => fetchFrames(mediaUrl, from, to - from, signal));
-    check(token);
-    // An older launcher, or a read that failed: nothing learned either way.
-    if (!frames) return;
-    const roll = findCreditRoll(frames.data, {
-        start: from, fps: frames.fps, width: frames.width, height: frames.height, from: credits.start - PICTURE_ROLL_FROM, atEnd: to >= duration - 1,
-    });
-    evidence.creditsPicture = { roll };
-    await store.setPictureMisses(job.metaId, job.season, roll ? 0 : (await store.getPictureMisses(job.metaId, job.season)) + 1);
+function pictureWindow(duration, credits, length, heavy) {
+    const end = Math.floor(duration);
+    let from;
+    if (credits) from = credits.start - PICTURE_BEFORE_MUSIC;
+    else if (length) from = duration - length.seconds - PICTURE_BEFORE_LEARNED;
+    else from = duration - PICTURE_SECONDS;
+    from = Math.max(0, Math.max(from, duration - (heavy ? PICTURE_HEAVY_SECONDS : 900)));
+    // Shared music that stops well before the end: the credits are inside it.
+    const to = credits && credits.end < duration - 15 ? Math.min(end, credits.start + PICTURE_AFTER_MUSIC) : end;
+    return { from, to: Math.max(to, Math.min(end, from + 30)) };
+}
+
+// The season's credits length for a file of about this length.
+function nearestLength(samples, duration) {
+    if (samples.length === 0) return null;
+    return samples.reduce((best, sample) => (Math.abs(sample.duration - duration) < Math.abs(best.duration - duration) ? sample : best));
+}
+
+// The music shared with the season's theme or the neighbours. Returns the
+// end fingerprint read and the credits it shows, if any.
+async function creditsFromAudio(job, mediaUrl, duration, token, evidence, refresh, theme) {
+    const neighbours = orderNeighbours(job.videos, job.videoId).slice(0, CREDITS_NEIGHBOURS);
+    const creditsOf = () => fuse({ ...evidence, duration, creditsPicture: null }).find((segment) => segment.type === 'credits' && segment.sources.includes('audio'));
+    let played = null;
+    for (const seconds of CREDITS_WINDOWS) {
+        played = await endFingerprint(mediaUrl, duration, seconds, token, job.videoId, fileKeyOf(job.stream), played);
+        if (!played) return { played: null, credits: null };
+        evidence.creditsRepetition = [];
+        const fromTheme = theme ? await creditsFromTheme(played, duration, theme) : null;
+        if (fromTheme) evidence.creditsRepetition.push(fromTheme);
+        // Neighbours only show where shared music lies; both are read at once
+        // (each read has a fixed cost of seconds), none once the season's
+        // theme has placed the credits.
+        if (!fromTheme) {
+            const references = await Promise.all(neighbours.map((video) => neighbourEnd(job, video, seconds, token).catch((error) => {
+                if (error instanceof Cancelled) throw error;
+                return null;
+            })));
+            for (const reference of references.filter(Boolean)) {
+                (await compute.match(played, reference, CREDITS_MATCH)).forEach((match) => evidence.creditsRepetition.push(asCredits(played, match, 1)));
+            }
+        }
+        refresh();
+        const credits = creditsOf();
+        // Starting at the edge of what was read: they may start earlier.
+        if (credits && credits.start <= played.from + 5 && seconds < CREDITS_WINDOWS[CREDITS_WINDOWS.length - 1]) continue;
+        return { played, credits: credits || null };
+    }
+    return { played, credits: null };
 }
 
 async function findCredits(job, mediaUrl, duration, token, evidence, refresh, options) {
     if (!Number.isFinite(duration)) return;
     const picture = Boolean(options && options.picture);
+    const heavy = Boolean(options && options.heavy);
     const theme = await store.getCreditsTheme(job.metaId, job.season);
-    const neighbours = orderNeighbours(job.videos, job.videoId).slice(0, CREDITS_NEIGHBOURS);
-    const creditsOf = () => fuse({ ...evidence, duration }).find((segment) => segment.type === 'credits' && segment.sources.includes('audio'));
-    for (const seconds of CREDITS_WINDOWS) {
-        const played = await endFingerprint(mediaUrl, duration, seconds, token, job.videoId, fileKeyOf(job.stream));
-        if (!played) return;
-        evidence.creditsRepetition = [];
-        const fromTheme = theme ? await creditsFromTheme(played, duration, theme) : null;
-        if (fromTheme) evidence.creditsRepetition.push(fromTheme);
-        // Neighbours only show where shared music lies, never enough to
-        // advance on (see fuseCredits): read until one has, and none once the
-        // season's theme has placed the credits.
-        for (const video of fromTheme ? [] : neighbours) {
-            if (creditsOf()) break;
-            const reference = await neighbourEnd(job, video, seconds, token);
-            if (!reference) continue;
-            (await compute.match(played, reference, CREDITS_MATCH)).forEach((match) => evidence.creditsRepetition.push(asCredits(played, match, 1)));
+    // Other episodes' credits lengths: one about as long as this file stands
+    // in when nothing is seen (fusion), and all of them back a start that
+    // gives the same length.
+    evidence.creditsLengths = await store.getCreditsLengths(job.metaId, job.season);
+    evidence.creditsLength = nearestLength(evidence.creditsLengths, duration);
+    refresh();
+    const { played, credits } = await creditsFromAudio(job, mediaUrl, duration, token, evidence, refresh, theme);
+    check(token);
+    let pictureFailed = false;
+
+    if (picture && (await store.getPictureMisses(job.metaId, job.season)) < PICTURE_MISS_LIMIT) {
+        const { from, to } = pictureWindow(duration, credits, evidence.creditsLength, heavy);
+        // A debrid host stalls now and then; one more try usually gets through.
+        let found = null;
+        for (let attempt = 0; attempt < 2 && found === null; attempt++) {
+            found = await findPictureCredits({
+                mediaUrl,
+                duration,
+                from,
+                to,
+                widen: !heavy,
+                read: (fetcher) => withRead(token, fetcher),
+                check: () => check(token),
+            });
         }
-        refresh();
-        let credits = creditsOf();
-        // Starting at the edge of what was read: they may start earlier.
-        if (credits && credits.start <= played.from + 5 && seconds < CREDITS_WINDOWS[CREDITS_WINDOWS.length - 1]) continue;
-        if (credits && picture) {
-            await pictureOfCredits(job, mediaUrl, duration, token, evidence, credits);
-            credits = creditsOf();
-            refresh();
-        }
-        if (credits && (!theme || !theme.confirmed || credits.confidence === 'high')) {
-            const from = Math.max(0, Math.round((credits.start - played.from) * FRAMES_PER_SECOND));
-            const to = Math.round((Math.min(credits.start + CREDITS_THEME_SECONDS, credits.end) - played.from) * FRAMES_PER_SECOND);
-            if (to - from >= 8 * FRAMES_PER_SECOND) {
-                const themeSeconds = (to - from) / FRAMES_PER_SECOND;
-                await store.setCreditsTheme(job.metaId, job.season, {
-                    hashes: played.hashes.slice(from, to),
-                    valid: played.valid.slice(from, to),
-                    seconds: themeSeconds,
-                    confirmed: credits.confidence === 'high',
-                    // What follows the theme to the end of this file.
-                    tail: duration - (played.from + to / FRAMES_PER_SECOND),
-                });
+        // An older launcher, or reads that failed: nothing learned, and the
+        // file is looked at again next time (see the end).
+        pictureFailed = found === null;
+        if (found) {
+            evidence.creditsPicture = { run: found.run, device: found.device };
+            // Only a look that could see credits over footage counts as a miss.
+            if (found.run || found.device) {
+                await store.setPictureMisses(job.metaId, job.season, found.run ? 0 : (await store.getPictureMisses(job.metaId, job.season)) + 1);
             }
         }
-        // No shared music near the end: a new song every episode. The
-        // picture alone may still be sure of the credits.
-        if (!credits && picture) await closingPicture(job, mediaUrl, duration, token, evidence);
-        return;
+        refresh();
     }
-}
 
-// The last two minutes of the file, for credits from the picture alone
-// (creditFrames.findClosingRoll). Shows like this have no season theme to
-// fall back on, so each episode is read; a season where it finds nothing
-// twice is not read again.
-const CLOSING_SECONDS = 120;
-
-async function closingPicture(job, mediaUrl, duration, token, evidence) {
-    if ((await store.getPictureMisses(job.metaId, job.season)) >= PICTURE_MISS_LIMIT) return;
-    const from = Math.max(0, duration - CLOSING_SECONDS);
-    const frames = await withRead(token, (signal) => fetchFrames(mediaUrl, from, duration - from, signal));
-    check(token);
-    if (!frames) return;
-    const closing = findClosingRoll(frames.data, { start: from, fps: frames.fps, width: frames.width, height: frames.height });
-    evidence.creditsPicture = { closing };
-    await store.setPictureMisses(job.metaId, job.season, closing ? 0 : (await store.getPictureMisses(job.metaId, job.season)) + 1);
+    const fused = fuse({ ...evidence, duration }).find((segment) => segment.type === 'credits') || null;
+    // Seen in this file to the end, or certain: how long this season's
+    // credits run (never from the fallback, which only repeats a length).
+    const seen = evidence.creditsPicture && evidence.creditsPicture.run && evidence.creditsPicture.run.runsOut === true;
+    if (fused && (fused.confidence === 'high' || seen) && !(fused.sources.length === 1 && fused.sources[0] === 'season-length')) {
+        await store.addCreditsLength(job.metaId, job.season, { seconds: duration - fused.start, duration });
+    }
+    // The season's credits music, cut from where the credits start in this
+    // file, for later episodes (creditsFromTheme).
+    if (played && credits && fused && fused.sources.includes('audio') && (!theme || !theme.confirmed || fused.confidence === 'high')) {
+        const from = Math.max(0, Math.round((fused.start - played.from) * FRAMES_PER_SECOND));
+        const to = Math.round((Math.min(fused.start + CREDITS_THEME_SECONDS, credits.end) - played.from) * FRAMES_PER_SECOND);
+        if (to - from >= 8 * FRAMES_PER_SECOND) {
+            await store.setCreditsTheme(job.metaId, job.season, {
+                hashes: played.hashes.slice(from, to),
+                valid: played.valid.slice(from, to),
+                seconds: (to - from) / FRAMES_PER_SECOND,
+                confirmed: fused.confidence === 'high',
+                // What follows the theme to the end of this file.
+                tail: duration - (played.from + to / FRAMES_PER_SECOND),
+            });
+        }
+    }
+    if (pictureFailed) throw new Error('could not read the picture for the credits');
 }
 
 // ── The intro's last frame ──────────────────────────────────────────────────
@@ -783,9 +842,18 @@ async function run(job, token) {
         if (settings.useDatabases) {
             work.push(databaseAnswer(job).then((answer) => { evidence.database = answer; refresh(); }));
         }
-        // Set by the audio task: how to look for the credits once the intro
-        // is settled and kept. Nothing needs them until the end.
-        let creditsSearch = null;
+        // The light release read in place of a heavy file, once looked up
+        // (undefined: not looked up yet).
+        let standInOf;
+        const findStandIn = async () => {
+            if (standInOf === undefined) {
+                standInOf = isHeavy(job.stream, job.duration)
+                    ? lightStandIn(await fetchEpisodeStreams(job.transportUrl, job.type, job.videoId), job.duration)
+                    : null;
+            }
+            return standInOf;
+        };
+        const named = (type) => Boolean(evidence.chapters) && evidence.chapters.named.some((chapter) => chapter.type === type);
         if (audioWanted) {
             work.push((async () => {
                 try {
@@ -794,14 +862,10 @@ async function run(job, token) {
                     // the probe answers in a few seconds: wait for it before
                     // downloading anything for audio.
                     await Promise.race([chaptersRead.catch(() => null), sleep(CHAPTER_WAIT_MS)]);
-                    const named = (type) => Boolean(evidence.chapters) && evidence.chapters.named.some((chapter) => chapter.type === type);
                     const playedUrl = await mediaUrl;
-                    const standIn = isHeavy(job.stream, job.duration)
-                        ? lightStandIn(await fetchEpisodeStreams(job.transportUrl, job.type, job.videoId), job.duration)
-                        : null;
+                    const standIn = await findStandIn();
                     if (!standIn) {
                         audioDone = named('intro') || await findSharedAudio(job, playedUrl, token, evidence, refresh);
-                        if (!named('credits')) creditsSearch = () => findCredits(job, playedUrl, job.duration, token, evidence, refresh, { picture: true });
                         return;
                     }
                     evidence.standIn = true;
@@ -813,12 +877,6 @@ async function run(job, token) {
                     if (intro && fingerprint) {
                         evidence.offset = await offsetOnPlayedFile(playedUrl, fingerprint, intro.start, token).catch(() => null);
                     }
-                    if (!named('credits')) {
-                        creditsSearch = async () => {
-                            const info = await fetchChapters(standIn.url);
-                            if (info && info.duration) await findCredits(standInJob, standIn.url, info.duration, token, evidence, refresh);
-                        };
-                    }
                 } catch (error) {
                     if (error instanceof Cancelled) throw error;
 
@@ -827,6 +885,25 @@ async function run(job, token) {
             })());
         }
         await Promise.allSettled(work);
+        check(token);
+        // How to look for the credits once the intro is settled and kept.
+        // Every episode of a series gets this, whether or not its season has
+        // an intro to find; nothing needs the credits until the end.
+        let creditsSearch = null;
+        const creditsWanted = settings.backgroundAnalysis && job.type === 'series' && Number.isFinite(job.season) && !named('credits');
+        if (creditsWanted && await checkExtractServer().catch(() => false)) {
+            const playedUrl = await mediaUrl.catch(() => null);
+            const standIn = playedUrl ? await findStandIn().catch(() => null) : null;
+            if (playedUrl && !standIn) {
+                creditsSearch = () => findCredits(job, playedUrl, job.duration, token, evidence, refresh, { picture: true, heavy: isHeavy(job.stream, job.duration) });
+            } else if (playedUrl) {
+                evidence.creditsStandIn = true;
+                creditsSearch = async () => {
+                    const info = await fetchChapters(standIn.url);
+                    if (info && info.duration) await findCredits({ ...job, stream: standIn }, standIn.url, info.duration, token, evidence, refresh, { picture: true });
+                };
+            }
+        }
         check(token);
         evidence.localDone = audioDone && audioWanted;
         const fused = fuseForPlayback(evidence);

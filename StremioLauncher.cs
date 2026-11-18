@@ -162,7 +162,7 @@ class StremioLauncher
         // Without it GitHub Pages' max-age=600 pins a stale bundle for up to 10
         // minutes after every deploy (the service worker often does not control
         // navigations inside the Stremio shell webview).
-        const string WEB_UI_CACHE_VERSION = "2026-11-15-skip-reads";
+        const string WEB_UI_CACHE_VERSION = "2026-11-18-credits-gpu";
         string webuiUrl = "https://jeromenicholas07.github.io/stremio-neo/?v="
             + Uri.EscapeDataString(WEB_UI_CACHE_VERSION)
             + "#/?streamingServerUrl=" + Uri.EscapeDataString("http://127.0.0.1:12470/");
@@ -810,7 +810,7 @@ class StremioLauncher
         }
         string headers = GetQueryParam(qs, "headers");
         if (headers != null && (headers.IndexOf('"') >= 0 || headers.IndexOf('\\') >= 0)) return false;
-        foreach (string name in new[] { "start", "duration" })
+        foreach (string name in new[] { "start", "duration", "fps", "width", "height" })
         {
             string value = GetQueryParam(qs, name);
             double number;
@@ -1443,7 +1443,7 @@ class StremioLauncher
                 // -reconnect flags: retry on transient 5xx or dropped connections.
                 // -analyzeduration/probesize: don't read huge amounts before seeking.
                 string ffArgs = string.Format(
-                    "-seekable 1 -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 " +
+                    "-seekable 1 -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -rw_timeout 15000000 " +
                     "-analyzeduration 2000000 -probesize 1000000 " +
                     "-ss {0} -i \"{1}\" -t {2} -vn -ac 1 -ar 16000 -f f32le -y pipe:1",
                     start, mediaURL, duration);
@@ -1526,37 +1526,45 @@ class StremioLauncher
         }
     }
 
-    // GET /frames?mediaURL=<url>&start=<s>&duration=<s>[&headers=<raw headers>]
-    //   -> raw 8-bit grey frames, 160x90, 2 per second, back to back
+    // GET /frames?mediaURL=<url>&start=<s>&duration=<s>[&width=<px>&height=<px>&fps=<n>][&headers=<raw headers>]
+    //   -> raw 8-bit grey frames, width x height (default 160x90), fps per
+    //      second (default 2), back to back
     //
-    // Small frames from the end of an episode, for Skip Intro to recognise a
-    // credit roll. It runs alongside playback, so ffmpeg gets one thread, below
-    // normal priority and no hardware decoding (the GPU is mpv's), and skips
-    // the in-loop deblocking that nothing at this size can see.
-    static void HandleFrames(Stream stream, string qs)
+    // Frames from the end of an episode, for Skip Intro to find the credits:
+    // small ones for the dark-frame test, up to 640x360 for the text detector.
+    // Decoding runs on the GPU's video engine (NVDEC) where it can, which mpv
+    // playing on the same card does not notice; a 10-bit file downloads its
+    // frames as p010, and anything NVDEC cannot take is decoded in software
+    // on two threads at below normal priority.
+    const int FRAMES_MAX_SECONDS = 360;
+    // 0 = not tried yet, 1 = works, -1 = could not start: not tried again.
+    static int _framesCuda = 0;
+    // Files found to be 10-bit, read through cuda10 straight away next time
+    // (a refused first try costs a debrid connection, seconds).
+    static readonly Dictionary<string, bool> _framesTenBit = new Dictionary<string, bool>();
+
+    static string FramesArgs(string mode, double start, string mediaURL, double duration, int width, int height, double fps)
     {
-        string mediaURL = GetQueryParam(qs, "mediaURL");
-        double start, duration;
-        if (string.IsNullOrEmpty(mediaURL)
-            || !double.TryParse(GetQueryParam(qs, "start") ?? "0", NumberStyles.Float, CultureInfo.InvariantCulture, out start)
-            || !double.TryParse(GetQueryParam(qs, "duration") ?? "60", NumberStyles.Float, CultureInfo.InvariantCulture, out duration))
-        {
-            WriteResponse(stream, 400, "text/plain", Encoding.UTF8.GetBytes("Missing or bad parameters"), true);
-            return;
-        }
-        start = Math.Max(0, start);
-        duration = Math.Min(120, Math.Max(1, duration));
-
-        string ffArgs = string.Format(CultureInfo.InvariantCulture,
-            "-hide_banner -nostats -loglevel error -threads 1 -skip_loop_filter all " +
+        string input = string.Format(CultureInfo.InvariantCulture,
             "-seekable 1 -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 3 -rw_timeout 8000000 " +
-            "-ss {0:0.###} -i \"{1}\" -t {2:0.###} -an -sn " +
-            "-vf \"fps=2,scale=160:90:flags=area,format=gray\" -filter_threads 1 -f rawvideo -pix_fmt gray pipe:1",
-            start, mediaURL, duration);
-        string customHeaders = GetQueryParam(qs, "headers");
-        if (!string.IsNullOrEmpty(customHeaders))
-            ffArgs = string.Format("-headers \"{0}\r\n\" {1}", customHeaders, ffArgs);
+            "-ss {0:0.###} -i \"{1}\" -t {2:0.###} -an -sn -dn ", start, mediaURL, duration);
+        string rate = fps.ToString("0.###", CultureInfo.InvariantCulture);
+        if (mode == "cuda" || mode == "cuda10")
+        {
+            return string.Format(CultureInfo.InvariantCulture,
+                "-hide_banner -nostats -loglevel error -hwaccel cuda -hwaccel_output_format cuda {0}" +
+                "-vf \"fps={1},scale_cuda={2}:{3},hwdownload,format={4},format=gray\" -f rawvideo -pix_fmt gray pipe:1",
+                input, rate, width, height, mode == "cuda10" ? "p010le" : "nv12");
+        }
+        return string.Format(CultureInfo.InvariantCulture,
+            "-hide_banner -nostats -loglevel error -threads 2 -skip_loop_filter all {0}" +
+            "-vf \"fps={1},scale={2}:{3}:flags=area,format=gray\" -filter_threads 1 -f rawvideo -pix_fmt gray pipe:1",
+            input, rate, width, height);
+    }
 
+    // One ffmpeg run: the frames, or null with ffmpeg's complaint in `error`.
+    static byte[] RunFrames(string ffArgs, int timeoutMs, out bool timedOut, out string error)
+    {
         var psi = new ProcessStartInfo(_ffmpeg, ffArgs)
         {
             UseShellExecute = false,
@@ -1564,39 +1572,121 @@ class StremioLauncher
             RedirectStandardError = true,
             CreateNoWindow = true
         };
+        var errors = new StringBuilder();
+        bool killed = false;
+        var ms = new MemoryStream();
         using (var proc = Process.Start(psi))
         {
             try { proc.PriorityClass = ProcessPriorityClass.BelowNormal; } catch { }
-            proc.ErrorDataReceived += (s, e) => { };
+            proc.ErrorDataReceived += (s, e) => { if (e.Data != null) lock (errors) { if (errors.Length < 2000) errors.AppendLine(e.Data); } };
             proc.BeginErrorReadLine();
-            bool timedOut = false;
-            var ms = new MemoryStream();
             using (new Timer(_ =>
             {
-                timedOut = true;
+                killed = true;
                 try { if (!proc.HasExited) proc.Kill(); } catch { }
-            }, null, AUDIO_EXTRACT_TIMEOUT_MS, Timeout.Infinite))
+            }, null, timeoutMs, Timeout.Infinite))
             {
                 proc.StandardOutput.BaseStream.CopyTo(ms);
                 if (!proc.WaitForExit(5000))
                 {
-                    timedOut = true;
+                    killed = true;
                     try { proc.Kill(); } catch { }
                 }
             }
+        }
+        timedOut = killed;
+        lock (errors) error = errors.ToString();
+        return ms.Length > 0 ? ms.ToArray() : null;
+    }
+
+    static void HandleFrames(Stream stream, string qs)
+    {
+        string mediaURL = GetQueryParam(qs, "mediaURL");
+        double start, duration, fps;
+        int width, height;
+        if (string.IsNullOrEmpty(mediaURL)
+            || !double.TryParse(GetQueryParam(qs, "start") ?? "0", NumberStyles.Float, CultureInfo.InvariantCulture, out start)
+            || !double.TryParse(GetQueryParam(qs, "duration") ?? "60", NumberStyles.Float, CultureInfo.InvariantCulture, out duration)
+            || !double.TryParse(GetQueryParam(qs, "fps") ?? "2", NumberStyles.Float, CultureInfo.InvariantCulture, out fps)
+            || !int.TryParse(GetQueryParam(qs, "width") ?? "160", NumberStyles.Integer, CultureInfo.InvariantCulture, out width)
+            || !int.TryParse(GetQueryParam(qs, "height") ?? "90", NumberStyles.Integer, CultureInfo.InvariantCulture, out height))
+        {
+            WriteResponse(stream, 400, "text/plain", Encoding.UTF8.GetBytes("Missing or bad parameters"), true);
+            return;
+        }
+        start = Math.Max(0, start);
+        duration = Math.Min(FRAMES_MAX_SECONDS, Math.Max(1, duration));
+        fps = Math.Min(4, Math.Max(0.25, fps));
+        // Even sizes: the GPU scaler and nv12 both need them.
+        width = Math.Min(640, Math.Max(32, width)) & ~1;
+        height = Math.Min(360, Math.Max(18, height)) & ~1;
+        // A read grows with its length: 30 s for the connection and the seek,
+        // then a third of a second per second of video.
+        int timeoutMs = 30000 + (int)(duration * 330);
+        string customHeaders = GetQueryParam(qs, "headers");
+
+        var modes = new List<string>();
+        bool tenBit;
+        lock (_framesTenBit) tenBit = _framesTenBit.ContainsKey(mediaURL);
+        if (_framesCuda >= 0) { if (!tenBit) modes.Add("cuda"); modes.Add("cuda10"); }
+        modes.Add("software");
+        for (int i = 0; i < modes.Count; i++)
+        {
+            string mode = modes[i];
+            string ffArgs = FramesArgs(mode, start, mediaURL, duration, width, height, fps);
+            if (!string.IsNullOrEmpty(customHeaders))
+                ffArgs = string.Format("-headers \"{0}\r\n\" {1}", customHeaders, ffArgs);
+            bool timedOut;
+            string error;
+            byte[] frames = RunFrames(ffArgs, timeoutMs, out timedOut, out error);
             if (timedOut)
             {
                 WriteResponse(stream, 504, "text/plain", Encoding.UTF8.GetBytes("FFmpeg timed out"), true);
                 return;
             }
-            byte[] frames = ms.ToArray();
-            if (frames.Length == 0)
+            if (frames != null)
             {
-                WriteResponse(stream, 502, "text/plain", Encoding.UTF8.GetBytes("Could not read the video"), true);
+                if (mode != "software") _framesCuda = 1;
+                WriteResponse(stream, 200, "application/octet-stream", frames, true);
                 return;
             }
-            WriteResponse(stream, 200, "application/octet-stream", frames, true);
+            if (mode == "software") break;
+            LogError("[Frames] " + mode + " decode failed, trying the next one: " + FirstLine(error));
+            // nv12 refused on download is a 10-bit file: cuda10 is next.
+            if (mode == "cuda" && error.IndexOf("hwframe download", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                lock (_framesTenBit)
+                {
+                    if (_framesTenBit.Count > 64) _framesTenBit.Clear();
+                    _framesTenBit[mediaURL] = true;
+                }
+                continue;
+            }
+            if (mode == "cuda")
+            {
+                if (_framesCuda == 0 && GpuSetupError(error)) _framesCuda = -1;
+                modes.Remove("cuda10");
+                // The host, not the decoder: another decoder would only fail too.
+                if (StreamError(error)) break;
+            }
         }
+        WriteResponse(stream, 502, "text/plain", Encoding.UTF8.GetBytes("Could not read the video"), true);
+    }
+
+    static bool GpuSetupError(string error)
+    {
+        return Regex.IsMatch(error, @"(cuda|cuvid|nvdec|hwaccel|Device creation failed|No device available)", RegexOptions.IgnoreCase);
+    }
+
+    static bool StreamError(string error)
+    {
+        return Regex.IsMatch(error, @"(HTTP error|Server returned|Connection refused|Connection timed out|Invalid data found|No such file)", RegexOptions.IgnoreCase);
+    }
+
+    static string FirstLine(string text)
+    {
+        int nl = text.IndexOf('\n');
+        return (nl >= 0 ? text.Substring(0, nl) : text).Trim();
     }
 
     // GET /scene-cuts?mediaURL=<url>&start=<s>&duration=<s>[&headers=<raw headers>]
