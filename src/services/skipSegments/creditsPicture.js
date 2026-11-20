@@ -38,6 +38,8 @@ const FINE_SECONDS = 7;
 const SCENE_BEFORE = 10;
 // A last read this many frames short ends where the picture ends.
 const SHORT_READ_FRAMES = 3;
+// The picture's verdicts kept from this long before the credits start.
+const TAIL_BEFORE = 10;
 // Dense looks further on when the first finds no card (FINE_SECONDS each).
 const FURTHER_LOOKS = 3;
 
@@ -217,7 +219,15 @@ async function findPictureCredits({ mediaUrl, duration, from, to, read, check, w
         ? findClosingRoll(window.small, { start: window.from, fps: COARSE_FPS, width: SMALL_WIDTH, height: SMALL_HEIGHT })
         : null;
     const solid = Boolean(closing) && closing.start >= run.start - 5 && run.runsOut === true;
-    return { run: { start, end: run.end, runsOut: run.runsOut, solid, coarseStart: run.start }, device: window.device };
+    // What the picture shows from just before the credits to the end, for
+    // where the story ends (storyEnd): dark or not, text or not.
+    const tailFrom = Math.max(0, Math.round((Math.min(start, run.start) - TAIL_BEFORE - window.from) * window.fps));
+    const tail = {
+        from: window.from + tailFrom / window.fps,
+        fps: window.fps,
+        frames: window.verdicts.slice(tailFrom).map((verdict) => ({ dark: Boolean(verdict.dark), text: Boolean(verdict.text || verdict.darkText) })),
+    };
+    return { run: { start, end: run.end, runsOut: run.runsOut, solid, coarseStart: run.start }, tail, device: window.device };
 }
 
 module.exports = {
