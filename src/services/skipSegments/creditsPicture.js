@@ -36,6 +36,10 @@ const WIDEN_SECONDS = 240;
 const FINE_BEFORE = 4;
 const FINE_SECONDS = 7;
 const SCENE_BEFORE = 10;
+// A last read this many frames short ends where the picture ends.
+const SHORT_READ_FRAMES = 3;
+// Dense looks further on when the first finds no card (FINE_SECONDS each).
+const FURTHER_LOOKS = 3;
 
 /**
  * [from, to) at `fps`, in one read or two side by side. Frames of a read that
@@ -47,15 +51,22 @@ async function judge(frames, judgeWith) {
     return (await judgeWith(frames)) || judgeFrames(frames, async () => null);
 }
 
-async function readWindow(read, mediaUrl, from, to, fps, judgeWith) {
+async function readWindow(read, mediaUrl, from, to, fps, judgeWith, atEnd = false) {
     const seconds = to - from;
     const parts = seconds <= SINGLE_READ_SECONDS ? [[from, to]] : [[from, from + seconds / 2], [from + seconds / 2, to]];
     if (parts.some(([a, b]) => b - a > MAX_READ_SECONDS)) {
         throw new Error('picture window too long');
     }
     const reads = await Promise.all(parts.map(([a, b]) => read((signal) => fetchFrames(mediaUrl, a, b - a, signal, { width: WIDTH, height: HEIGHT, fps }))));
-    if (!reads[reads.length - 1]) return null;
-    const total = Math.round(seconds * fps);
+    const last = reads[reads.length - 1];
+    if (!last) return null;
+    let total = Math.round(seconds * fps);
+    // The picture can stop well before the length the file claims (two
+    // minutes early, a Stranger Things web release): where the last read
+    // runs out of frames is the end.
+    const lastFrom = Math.round((parts[parts.length - 1][0] - from) * fps);
+    const lastCount = Math.floor(last.data.length / (last.width * last.height));
+    if (atEnd && lastFrom + lastCount < total - SHORT_READ_FRAMES) total = lastFrom + lastCount;
     const verdicts = Array.from({ length: total }, () => ({ text: false, fits: false, darkText: false }));
     const small = new Uint8Array(total * SMALL_WIDTH * SMALL_HEIGHT);
     let device = null;
@@ -147,7 +158,7 @@ function pickRun(window, atEnd) {
  */
 async function findPictureCredits({ mediaUrl, duration, from, to, read, check, widen = true, judgeWith = judgeInWorker }) {
     const atEnd = to >= duration - 1;
-    let window = await readWindow(read, mediaUrl, from, to, COARSE_FPS, judgeWith);
+    let window = await readWindow(read, mediaUrl, from, to, COARSE_FPS, judgeWith, atEnd);
     check();
     if (!window) return null;
     let run = pickRun(window, atEnd);
@@ -172,14 +183,31 @@ async function findPictureCredits({ mediaUrl, duration, from, to, read, check, w
         read((signal) => fetchSceneCuts(mediaUrl, sceneFrom, run.start + 1 - sceneFrom, signal)),
     ]);
     check();
-    let first = run.start;
-    if (fine) {
-        const judged = await judge(fine, judgeWith);
-        const dense = run.weak ? asWeak(judged.verdicts, run.band).map((verdict, i) => ({ ...verdict, box: judged.verdicts[i].box, dark: judged.verdicts[i].dark })) : judged.verdicts;
-        const found = firstCreditsFrame(markStill(dense), { start: fineFrom, fps: FINE_FPS, near: run.start });
-        if (found !== null) first = found;
+    const denseLook = async (frames, from, near, ahead) => {
+        const judged = await judge(frames, judgeWith);
+        // A lone line must hold still even on a dark frame (lit sandals in a
+        // dim last shot, Shōgun); only a column of text on black may move.
+        const dense = run.weak ? asWeak(judged.verdicts, run.band).map((verdict, i) => ({ ...verdict, box: judged.verdicts[i].box, dark: judged.verdicts[i].dark && judged.verdicts[i].text })) : judged.verdicts;
+        return firstCreditsFrame(markStill(dense), { start: from, fps: FINE_FPS, near, ahead });
+    };
+    let found = fine ? await denseLook(fine, fineFrom, run.start) : null;
+    // Text in the closing shot (a poster on the wall) can start the coarse
+    // run seconds early: no card near its start, so look on to the first.
+    for (let look = 0, from = fineFrom + FINE_SECONDS; fine && found === null && look < FURTHER_LOOKS && from < run.end; look++, from += FINE_SECONDS) {
+        const lookFrom = from;
+        const more = await read((signal) => fetchFrames(mediaUrl, lookFrom, FINE_SECONDS, signal, { width: WIDTH, height: HEIGHT, fps: FINE_FPS }));
+        check();
+        if (!more) break;
+        found = await denseLook(more, lookFrom, lookFrom, FINE_SECONDS);
     }
-    const start = snapToCut(first, scene, 1);
+    const first = found !== null ? found : run.start;
+    let cuts = scene;
+    if (first > run.start + 1) {
+        const from = Math.max(0, first - SCENE_BEFORE);
+        cuts = await read((signal) => fetchSceneCuts(mediaUrl, from, first + 1 - from, signal));
+        check();
+    }
+    const start = snapToCut(first, cuts, 1);
 
     // A roll on black that the strict test is sure of (findClosingRoll) needs
     // nothing else to advance on.

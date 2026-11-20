@@ -74,6 +74,24 @@ describe('credits text: runs', () => {
         expect(run).toMatchObject({ start: 200, runsOut: true });
     });
 
+    it('runs out through logos and then minutes of black closing the file', () => {
+        // Credits 100-170 s, logos (no text, not dark) 170-180 s, black to 300 s.
+        const run = findTextRun(frames(300, (i) => i >= 100 && i < 170, (i) => i >= 180), { start: 0, fps: 1, atEnd: true });
+        expect(run).toMatchObject({ start: 100, runsOut: true });
+        // A scene after the credits, then the black: still a stinger.
+        const stinger = findTextRun(frames(300, (i) => i >= 100 && i < 170, (i) => i >= 240), { start: 0, fps: 1, atEnd: true });
+        expect(stinger).toMatchObject({ start: 100, runsOut: false });
+    });
+
+    it('joins credits split by a few cards it cannot see, not a short sign before them', () => {
+        // Credits 100-128 s, 8 s of cards not seen, credits again 137-280 s.
+        const split = findTextRun(frames(300, (i) => (i >= 100 && i < 128) || (i >= 137 && i < 280)), { start: 0, fps: 1, atEnd: true });
+        expect(split).toMatchObject({ start: 100, runsOut: true });
+        // A sign seen for 6 s in the last scene, 8 s before the credits.
+        const sign = findTextRun(frames(300, (i) => (i >= 123 && i < 129) || (i >= 137 && i < 280)), { start: 0, fps: 1, atEnd: true });
+        expect(sign).toMatchObject({ start: 137 });
+    });
+
     it('says nothing about running out when the read stops short of the end', () => {
         expect(findTextRun(frames(120, (i) => i >= 30), { start: 0, fps: 1 }).runsOut).toBeNull();
     });
@@ -92,6 +110,19 @@ describe('credits text: runs', () => {
         expect(snapToCut(103.25, { cuts: [101.9], blacks: [] })).toBe(103.25);
         expect(snapToCut(103.25, { cuts: [], blacks: [[101.5, 103.2]] })).toBe(101.5);
         expect(snapToCut(103.25, null)).toBe(103.25);
+    });
+
+    it('starts a black stretch where the picture settles at black, not on a dark last shot', () => {
+        // The Mandalorian: black detected from 1951.1 s, a ship glowing in
+        // space (87) until 1954.9 s, then black (74), the card at 1956 s (77).
+        const luma = [];
+        for (let t = 1950; t < 1957; t += 0.25) luma.push([t, t < 1954.9 ? 87 : t < 1955.9 ? 74 : 77]);
+        expect(snapToCut(1956, { cuts: [], blacks: [[1951.1, 1959]], luma })).toBe(1955);
+        // Black at the floor all through: the detector's start stands.
+        expect(snapToCut(1956, { cuts: [], blacks: [[1951.1, 1959]], luma: luma.map(([t]) => [t, 74]) })).toBe(1951.1);
+        // The Sopranos: half a second of black, then the card fading in.
+        const fade = [[3548.0, 90], [3548.25, 16], [3548.5, 16], [3548.75, 30], [3549, 60]];
+        expect(snapToCut(3548.81, { cuts: [], blacks: [[3548.13, 3548.63]], luma: fade })).toBe(3548.13);
     });
 });
 
@@ -179,6 +210,15 @@ describe('credits text: reading the picture', () => {
         expect(reads.filter((read) => read.fps === 4)).toHaveLength(1);
     });
 
+    it('takes the end of the picture for the end when the file claims to run longer', async () => {
+        // The file says 2700 s; the launcher's frames stop at 2600 s.
+        const found = await findPictureCredits({
+            mediaUrl: 'http://example.test/ep.mkv', duration: 2700, from: 2700 - 480, to: 2700,
+            read: (fetcher) => fetcher(undefined), check: () => undefined, judgeWith: (frames) => judgeFrames(frames, detect),
+        });
+        expect(found.run).toMatchObject({ start: 2483.4, runsOut: true });
+    });
+
     it('says the frames could not be read when the launcher fails', async () => {
         global.fetch = jest.fn(async () => ({ ok: false }));
         const found = await findPictureCredits({
@@ -196,6 +236,15 @@ describe('credits text: still text over the picture', () => {
             ? { text: true, fits: true, dark: false, box: [10, 180, 30 + i * 8, 230] }
             : { text: true, fits: true, dark: false, box: [160, 80, 480, 270] }));
         expect(firstCreditsFrame(markStill(dense), { start: 10, fps: 4, near: 11.5 })).toBe(12);
+    });
+
+    it('does not take a poster drifting slowly with the camera, but takes jittering overlay text', () => {
+        // Breaking Bad: a poster in the corner drifts 2 px a frame; overlay
+        // text jitters a pixel back and forth.
+        const drift = Array.from({ length: 12 }, (_, i) => ({ text: true, fits: true, dark: false, box: [508 + i * 2, 40, 604 + i * 2, 92] }));
+        expect(markStill(drift).some((frame) => frame.still)).toBe(false);
+        const jitter = Array.from({ length: 6 }, (_, i) => ({ text: true, fits: true, dark: false, box: [132 + (i % 2), 293, 228 - (i % 2), 313] }));
+        expect(markStill(jitter).every((frame) => frame.still)).toBe(true);
     });
 
     it('takes a roll scrolling on black although it moves', () => {

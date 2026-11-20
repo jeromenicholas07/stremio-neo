@@ -181,6 +181,10 @@ const HOLD_SHARE = 0.75;
 // Studio and network logos and vanity cards close many files (BoJack
 // Horseman: four of them, 16 s), as fusion.LOGO_SECONDS allows.
 const LOGO_TAIL_SECONDS = 20;
+// Two stretches of credits this close together are one, the earlier one at
+// least this long.
+const JOIN_GAP_SECONDS = 10;
+const JOIN_MIN_SECONDS = 10;
 
 /**
  * The last run of credits-like frames in a read, and where it starts.
@@ -217,19 +221,24 @@ function findTextRun(frames, { start, fps, minSeconds = 20, share = 0.55, atEnd 
     if (open !== null) runs.push(open);
     const hold = Math.max(1, Math.round(HOLD_SECONDS * fps));
     const tail = atEnd ? Math.round(LOGO_TAIL_SECONDS * fps) : 0;
-    for (let r = runs.length - 1; r >= 0; r--) {
-        const run = runs[r];
-        // The run starts on its first text frame whose next seconds hold.
-        let first = -1;
+    // Black with nothing on it closing the file (after the logos, Brooklyn
+    // Nine-Nine) is the end too, however long it lasts.
+    let last = count - 1;
+    while (last > 0 && frames[last].fits && !frames[last].text) last--;
+    // The run starts on its first text frame whose next seconds hold.
+    const firstOf = (run) => {
         for (let i = run.from; i <= run.to; i++) {
             if (!frames[i].text) continue;
             let held = 0;
             const until = Math.min(run.to, i + hold - 1);
             for (let k = i; k <= until; k++) if (frames[k].fits) held++;
-            if (held / (until - i + 1) >= HOLD_SHARE) { first = i; break; }
+            if (held / (until - i + 1) >= HOLD_SHARE) return i;
         }
-        if (first < 0) continue;
-        const length = (run.to - first + 1) / fps;
+        return -1;
+    };
+    // Credits-like from `first` to the run's end, for at least `seconds`.
+    const credits = (run, first, seconds) => {
+        if (first < 0 || (run.to - first + 1) / fps < seconds) return false;
         let fitted = 0;
         let texted = 0;
         for (let i = first; i <= run.to; i++) {
@@ -237,19 +246,35 @@ function findTextRun(frames, { start, fps, minSeconds = 20, share = 0.55, atEnd 
             if (frames[i].text) texted++;
         }
         const span = run.to - first + 1;
-        if (length < minSeconds || fitted / span < share || texted / span < share / 2) continue;
+        return fitted / span >= share && texted / span >= share / 2;
+    };
+    const joinGap = Math.round(JOIN_GAP_SECONDS * fps);
+    for (let r = runs.length - 1; r >= 0; r--) {
+        const run = runs[r];
+        let first = firstOf(run);
+        if (!credits(run, first, minSeconds)) continue;
+        // Credits that a few cards the detector cannot tell from the
+        // picture split in two (a name alone mid-screen, The Mandalorian):
+        // an earlier stretch of credits just before is the same credits.
+        for (let p = r - 1, from = run.from; p >= 0 && from - runs[p].to - 1 <= joinGap; p--) {
+            const earlier = firstOf(runs[p]);
+            if (!credits(runs[p], earlier, JOIN_MIN_SECONDS)) break;
+            first = earlier;
+            from = runs[p].from;
+        }
         return {
             start: start + first / fps,
             end: start + (run.to + 1) / fps,
-            runsOut: atEnd ? run.to >= count - 1 - tail - maxGap : null,
+            runsOut: atEnd ? run.to >= last - tail - maxGap : null,
         };
     }
     return null;
 }
 
 // Text laid over the picture stays put to the pixel while the shot moves
-// under it; a poster or sign in the shot moves with the camera.
-const STILL_PIXELS = 3;
+// under it (a pixel or two of detector jitter); a poster or sign in the shot
+// moves with the camera, even a slow drift adding up over three frames.
+const STILL_PIXELS = 2;
 const still = (a, b) => Boolean(a && b) && a.every((value, i) => Math.abs(value - b[i]) <= STILL_PIXELS);
 
 /**
@@ -259,9 +284,11 @@ const still = (a, b) => Boolean(a && b) && a.every((value, i) => Math.abs(value 
  */
 function markStill(frames) {
     const same = (i, j) => Boolean(frames[i] && frames[j]) && still(frames[i].box, frames[j].box);
+    // Three frames in a row, each within a pixel or two of the others.
+    const holds = (a) => same(a, a + 1) && same(a + 1, a + 2) && same(a, a + 2);
     return frames.map((frame, i) => ({
         ...frame,
-        still: Boolean(frame.box) && ((same(i - 1, i) && same(i, i + 1)) || (same(i, i + 1) && same(i + 1, i + 2)) || (same(i - 2, i - 1) && same(i - 1, i))),
+        still: Boolean(frame.box) && (holds(i - 2) || holds(i - 1) || holds(i)),
     }));
 }
 
@@ -299,10 +326,37 @@ function firstCreditsFrame(frames, { start, fps, near, reach = 2.25, ahead = 2.5
 function snapToCut(time, scene, tolerance = 1) {
     if (!scene) return time;
     const blacks = scene.blacks.filter(([from, to]) => from <= time + 0.25 && to >= time - tolerance && from >= time - BLACK_BEFORE_CARD);
-    if (blacks.length > 0) return Math.min(...blacks.map(([from]) => from));
+    if (blacks.length > 0) {
+        const black = blacks.reduce((a, b) => (b[0] < a[0] ? b : a));
+        return settleBlack(black, time, scene.luma);
+    }
     const cuts = scene.cuts.filter((edge) => edge <= time + 0.25 && edge >= time - CUT_REACH);
     return cuts.length > 0 ? Math.max(...cuts) : time;
 }
+/**
+ * Where a black stretch really starts: the black detector takes a very dark
+ * last shot for black (a ship shrinking into space, The Mandalorian), so
+ * the start moves on to where the picture settles at the black's own
+ * brightness, by the launcher's per-frame average brightness (`luma`, [time,
+ * value] pairs, on the video's own scale). Only frames inside the stretch
+ * count: the first card, fading in or lifting the average a little, does not.
+ */
+function settleBlack([from, to], time, luma) {
+    if (!Array.isArray(luma)) return from;
+    const inside = luma.filter(([t]) => t >= from - 0.01 && t <= to && t < time - CARD_FRAME);
+    if (inside.length < 2) return from;
+    const floor = Math.min(...inside.map(([, y]) => y));
+    const allowed = floor + Math.max(BLACK_SLACK, floor * BLACK_SLACK_SHARE);
+    let start = from;
+    for (let i = 0; i < inside.length - 1; i++) {
+        if (inside[i][1] > allowed) start = inside[i + 1][0];
+    }
+    return start;
+}
+const CARD_FRAME = 0.13;
+const BLACK_SLACK = 4;
+const BLACK_SLACK_SHARE = 0.08;
+
 // A card that appears on a cut is seen within a frame of it (4 a second);
 // text fading in over a shot is not moved back to an earlier cut.
 const CUT_REACH = 0.5;
