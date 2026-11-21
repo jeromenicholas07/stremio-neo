@@ -228,18 +228,21 @@ const useSkipSegments = ({ player, stream, time, duration, buffering, paused, pl
     // Where credits of at least this confidence start, in the second half of
     // the file, in milliseconds.
     const creditsFrom = (accept) => {
-        const credits = segments.find((segment) => segment.type === 'credits' && accept(segment.confidence));
+        const credits = segments.find((segment) => segment.type === 'credits' && accept(segment.confidence, segment));
         return credits && durationSeconds !== null && credits.start > durationSeconds / 2 ? Math.round(credits.start * 1000) : null;
     };
     const creditsStart = React.useMemo(() => creditsFrom((confidence) => confidence !== 'low'), [segments, durationSeconds]);
     // Where to start counting down to the next episode: where the popup
-    // opens (the story's end, see storyEnd), when the viewer turned that on.
-    // Only with Auto-Pick on for the show: without it the next episode stops
-    // at its streams list.
+    // opens (the story's end, see storyEnd), when the viewer turned that on
+    // and the end can be trusted: credits found with high confidence, or an
+    // end of story checked by listening (no one still talking). A guess (the
+    // season's usual length) or an end judged without hearing the audio only
+    // opens the popup. Only with Auto-Pick on for the show: without it the
+    // next episode stops at its streams list.
     const autoNextAt = React.useMemo(() => {
         if (!autoNext || !getPlayableAutoPickSettings(type, metaId)) return null;
-        return creditsStart;
-    }, [creditsStart, autoNext, type, metaId, settingsVersion]);
+        return creditsFrom((confidence, segment) => confidence === 'high' || (confidence !== 'low' && segment.story === 'heard'));
+    }, [segments, durationSeconds, autoNext, type, metaId, settingsVersion]);
 
     return {
         active: notice === null ? active : null,

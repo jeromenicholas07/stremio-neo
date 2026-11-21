@@ -248,6 +248,11 @@ function fuseCredits(evidence) {
                 ...(mark !== undefined ? ['chapter-mark'] : []),
                 ...(learned ? ['season-length'] : []),
             ],
+            // How the story end was settled: 'heard' when the speech after
+            // the credits start was listened to (and, on a stand-in, lined up
+            // with the file played), so it can be advanced on; 'seen' when
+            // only the picture was.
+            ...(story ? { story: story.heard ? 'heard' : 'seen' } : {}),
         };
     }
 

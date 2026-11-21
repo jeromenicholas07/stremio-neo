@@ -328,7 +328,8 @@ function fuseForPlayback(evidence) {
         ? {
             ...evidence.creditsPicture,
             run: { ...run, start: run.start + shift, end: run.end + shift },
-            ...(story ? { story: { ...story, end: story.end + shift } } : {}),
+            // The story end moves by the offset measured at it, if any.
+            ...(story ? { story: { ...story, end: story.end + (typeof story.offset === 'number' ? story.offset : shift) } } : {}),
         }
         : evidence.creditsPicture;
     const segments = fuse({ ...evidence, repetition: moved(evidence.repetition), creditsRepetition: moved(evidence.creditsRepetition), creditsPicture });
@@ -522,8 +523,10 @@ async function findSharedAudio(job, mediaUrl, token, evidence, refresh) {
     }
     // Nothing shared. That counts against the season only when it was really
     // looked for: reads that failed on a slow host say nothing about the show,
-    // and two misses stop audio analysis for the season for a month.
-    if (comparedInFull) {
+    // and two misses stop audio analysis for the season for a month. Nor when
+    // the season has a theme: then this episode only cut it short or left it
+    // out.
+    if (comparedInFull && !(await store.getTheme(job.metaId, job.season))) {
         await store.setSeasonMisses(job.metaId, job.season, (await store.getSeasonMisses(job.metaId, job.season)) + 1);
     }
     return true;
@@ -661,7 +664,7 @@ async function speechToEnd(mediaUrl, from, duration, token) {
  * credits start, or the end of the scene still playing or talking under
  * them, or of a scene after the roll. Null when the picture gave no tail.
  */
-async function findStoryEnd(mediaUrl, duration, found, token) {
+async function findStoryEnd(mediaUrl, duration, found, token, { playedUrl = null, reference = null } = {}) {
     if (!found || !found.run || !found.tail || found.tail.frames.length === 0) return null;
     const { run, tail } = found;
     const speech = await speechToEnd(mediaUrl, Math.max(0, Math.floor(run.start - SPEECH_BEFORE)), duration, token);
@@ -674,7 +677,29 @@ async function findStoryEnd(mediaUrl, duration, found, token) {
         check(token);
     }
     const end = Math.min(snapStoryEnd(story, run.start, step, scene), duration);
-    return { end, by: story.by, words: story.words, live: story.live, roll: story.roll, logos: story.logos, scene: story.scene, heard: speech !== null };
+    // Read on a stand-in for a heavy file: where that moment sits in the file
+    // being played, by its audio there against the stand-in's end. Releases
+    // can be cut a few seconds apart; without the match the end is offered
+    // but not advanced on.
+    let offset = null;
+    if (playedUrl && reference) {
+        offset = await offsetOnPlayedFile(playedUrl, reference, end, token).catch((error) => {
+            if (error instanceof Cancelled) throw error;
+            return null;
+        });
+        check(token);
+    }
+    return {
+        end,
+        by: story.by,
+        words: story.words,
+        live: story.live,
+        roll: story.roll,
+        logos: story.logos,
+        scene: story.scene,
+        heard: speech !== null && (!playedUrl || offset !== null),
+        offset,
+    };
 }
 // Seasons where the picture showed nothing this many times are not read for
 // it again for a while (credits the detector cannot see, or none at all).
@@ -771,7 +796,7 @@ async function findCredits(job, mediaUrl, duration, token, evidence, refresh, op
             evidence.creditsPicture = { run: found.run, device: found.device };
             // Where the story really ends: names often run over the last
             // scene while it still plays.
-            const story = await findStoryEnd(mediaUrl, duration, found, token);
+            const story = await findStoryEnd(mediaUrl, duration, found, token, { playedUrl: options && options.playedUrl, reference: played });
             if (story) evidence.creditsPicture.story = story;
             // Only a look that could see credits over footage counts as a miss.
             if (found.run || found.device) {
@@ -850,7 +875,11 @@ async function prepareAhead(job, token) {
         const likely = likelyNext(job, streams);
         if (!likely) continue;
         const fileKey = fileKeyOf(likely);
-        if (await store.getResult(video.id, fileKey)) continue;
+        // Done, or its intro already found: nothing to prepare. A result
+        // without one (the season search was off when it was made) gets the
+        // theme looked for, keeping what else it has.
+        const existing = await store.getResult(video.id, fileKey);
+        if (existing && (existing.complete || existing.segments.some((segment) => segment.type === 'intro'))) continue;
         const standIn = isHeavy(likely, job.duration) ? lightStandIn(streams, job.duration) : null;
         const source = standIn || likely;
         const info = await fetchChapters(source.url);
@@ -872,7 +901,8 @@ async function prepareAhead(job, token) {
         if (evidence.repetition.length === 0 && evidence.creditsRepetition.length === 0) continue;
         const prepared = fuseForPlayback(evidence);
         const { segments, endCut } = standIn ? { segments: prepared, endCut: null } : await refineEnd(likely.url, prepared, null, token);
-        await store.setResult(video.id, fileKey, { segments, complete: false, endCut });
+        const kept = existing ? existing.segments.filter((segment) => !segments.some((other) => other.type === segment.type)) : [];
+        await store.setResult(video.id, fileKey, { segments: segments.concat(kept), complete: false, endCut });
     }
 }
 
@@ -898,14 +928,24 @@ async function run(job, token) {
 
     if (!cached || !cached.complete) {
         const evidence = { duration: job.duration, chapters: null, database: null, repetition: [], localDone: false };
+        // An intro found ahead of time in this same file (prepareAhead) is
+        // kept when this analysis brings none of its own: the season search
+        // can be off, or a read can fail, and the prepared intro was right.
+        const preparedIntro = cached && !cached.complete ? cached.segments.find((segment) => segment.type === 'intro') || null : null;
+        const withPrepared = (segments) => (preparedIntro && !segments.some((segment) => segment.type === 'intro') ? [preparedIntro, ...segments] : segments);
         // A prepared result stays on screen until fresh evidence replaces it.
         const refresh = () => {
-            const segments = fuseForPlayback(evidence);
+            const segments = withPrepared(fuseForPlayback(evidence));
             if (segments.length > 0 || !cached) publish(key, { status: 'working', segments });
         };
         const mediaUrl = resolveMediaUrl(job.streamingServerUrl, job.stream).then((media) => media.url);
+        // Misses stop the search for a season that shows no intro. Once two
+        // episodes were found to share one (the season's theme), it is always
+        // looked for (one read of this file): some episodes cut it short or
+        // leave it out (Two and a Half Men) without the others losing theirs.
+        const seasonTheme = Number.isFinite(job.season) ? await store.getTheme(job.metaId, job.season) : null;
         const audioWanted = settings.backgroundAnalysis && job.type === 'series' && Number.isFinite(job.season)
-            && (await store.getSeasonMisses(job.metaId, job.season)) < SEASON_MISS_LIMIT;
+            && (Boolean(seasonTheme) || (await store.getSeasonMisses(job.metaId, job.season)) < SEASON_MISS_LIMIT);
         let audioDone = !audioWanted;
         const chaptersRead = mediaUrl.then(fetchChapters).then((chapters) => { evidence.chapters = chapters; refresh(); });
         const work = [chaptersRead];
@@ -970,18 +1010,18 @@ async function run(job, token) {
                 evidence.creditsStandIn = true;
                 creditsSearch = async () => {
                     const info = await fetchChapters(standIn.url);
-                    if (info && info.duration) await findCredits({ ...job, stream: standIn }, standIn.url, info.duration, token, evidence, refresh, { picture: true });
+                    if (info && info.duration) await findCredits({ ...job, stream: standIn }, standIn.url, info.duration, token, evidence, refresh, { picture: true, playedUrl });
                 };
             }
         }
         check(token);
         evidence.localDone = audioDone && audioWanted;
-        const fused = fuseForPlayback(evidence);
+        const fused = withPrepared(fuseForPlayback(evidence));
         if (fused.length > 0) publish(key, { status: 'working', segments: fused });
         // Land on the episode's first frame. Times from a stand-in that could
         // not be lined up with this file are not refined against it.
         const settle = async (known) => {
-            const now = fuseForPlayback(evidence);
+            const now = withPrepared(fuseForPlayback(evidence));
             return evidence.standIn && evidence.offset === null ? { segments: now, endCut: null } : refineEnd(await mediaUrl, now, known, token);
         };
         // The evidence behind the result, for diagnosing a wrong skip.
