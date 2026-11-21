@@ -69,4 +69,28 @@ async function judgeInWorker(frames) {
     }
 }
 
-module.exports = { judgeInWorker };
+/**
+ * Where people talk in 16 kHz mono audio (Silero VAD in the worker). Null
+ * when no worker or no model: the story end is then judged from the
+ * picture alone.
+ *
+ * @param {Float32Array} pcm
+ * @param {number} from - seconds of the first sample in the file
+ * @returns {Promise<Array<{ start: number, end: number }> | null>}
+ */
+async function speechInWorker(pcm, from) {
+    if (!start()) return null;
+    try {
+        const result = await new Promise((resolve, reject) => {
+            const id = nextId++;
+            pending.set(id, { resolve, reject });
+            worker.postMessage({ id, op: 'speech', pcm, from, wasmUrl: wasmUrl() });
+        });
+        return result.segments;
+    } catch (error) {
+        console.warn('[SkipIntro] speech detector unavailable:', error && error.message ? error.message : error);
+        return null;
+    }
+}
+
+module.exports = { judgeInWorker, speechInWorker };

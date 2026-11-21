@@ -76,10 +76,11 @@ async function addCreditsLength(metaId, season, sample) {
 
 // Results belong to one file: another release of the same episode can be cut
 // differently.
-// The credits search a result was made with. One from an older search is
+// The credits search a result was made with (3: offered where the story
+// ends, by speech and the picture after the credits). One from an older search is
 // shown but looked at again: the old one skipped seasons without an intro
 // and credits over footage, and called those files done.
-const CREDITS_SEARCH = 2;
+const CREDITS_SEARCH = 3;
 async function getResult(videoId, fileKey) {
     const result = await get(`res${ALGORITHM}|${videoId}|${fileKey}`);
     if (!result || Date.now() - result.at >= RESULT_MAX_AGE_MS) return null;

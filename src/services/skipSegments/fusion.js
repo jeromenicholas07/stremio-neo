@@ -231,10 +231,15 @@ function fuseCredits(evidence) {
             .filter((sample) => Math.abs(sample.seconds - (duration - start)) <= LEARNED_TOLERANCE).length >= LEARNED_EPISODES;
         const runsOut = run.runsOut === true || (run.runsOut === null && audio && chain.end >= duration - CREDITS_TO_END);
         const agreed = audio || backing.length > 0 || mark !== undefined || learned;
+        // Offered from where the story ends (storyEnd): later than the first
+        // card when the last scene still plays or talks under the names, or
+        // a scene follows the roll. The checks above stay on the first card.
+        const story = evidence.creditsPicture.story;
+        const later = story && Number.isFinite(story.end) && story.end > start && story.end < duration ? story.end : null;
         return {
             type,
-            start,
-            end: runsOut ? duration : run.end,
+            start: later !== null ? later : start,
+            end: runsOut || (later !== null && later >= run.end) ? duration : run.end,
             confidence: runsOut && (agreed || run.solid === true) ? 'high' : 'medium',
             sources: [
                 'picture',
@@ -346,6 +351,9 @@ function fuse(evidence) {
     return TYPES
         .map((type) => (type === 'credits' ? fuseCredits(evidence) : fuseType(type, evidence)))
         .filter(Boolean)
+        // Never a segment that ends before it starts or starts past the end
+        // of the file (times from a neighbour of another length).
+        .filter((segment) => segment.end > segment.start && !(Number.isFinite(evidence.duration) && segment.start >= evidence.duration))
         // Failsafe: a segment longer than any real intro or recap is offered
         // as a button but never skipped on its own, whatever backs it.
         .map((segment) => (segment.confidence === 'high' && AUTO_SKIP_MAX_SECONDS[segment.type] && segment.end - segment.start > AUTO_SKIP_MAX_SECONDS[segment.type]

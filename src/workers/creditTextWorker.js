@@ -6,6 +6,7 @@
 import * as ort from 'onnxruntime-web/webgpu';
 import { boxesFromMap, linesFromBoxes, textFrame } from '../services/skipSegments/creditText';
 import { judgeFrames } from '../services/skipSegments/creditJudge';
+import { speechSegments, RATE, CHUNK, CONTEXT } from '../services/skipSegments/speech';
 
 // Pinned to a commit so a change upstream cannot swap the model under us.
 const MODEL_URL = 'https://huggingface.co/SWHL/RapidOCR/resolve/1cfba2e90fc938db55889873735088de210cc173/PP-OCRv4/ch_PP-OCRv4_det_infer.onnx';
@@ -21,18 +22,18 @@ const BATCH_WASM = 2;
 let sessionPromise = null;
 let device = null;
 
-async function modelBytes() {
+async function modelBytes(url = MODEL_URL) {
     let cache = null;
     try {
         cache = await caches.open(MODEL_CACHE);
-        const hit = await cache.match(MODEL_URL);
+        const hit = await cache.match(url);
         if (hit) return new Uint8Array(await hit.arrayBuffer());
     } catch { /* no Cache API: download every time */ }
-    const response = await fetch(MODEL_URL);
+    const response = await fetch(url);
     if (!response.ok) throw new Error(`model download failed: ${response.status}`);
     const bytes = await response.arrayBuffer();
     if (cache) {
-        try { await cache.put(MODEL_URL, new Response(bytes.slice(0))); } catch { /* full: next time */ }
+        try { await cache.put(url, new Response(bytes.slice(0))); } catch { /* full: next time */ }
     }
     return new Uint8Array(bytes);
 }
@@ -107,10 +108,67 @@ async function detect({ data, width, height, wasmUrl }) {
     return { verdicts, device };
 }
 
+// ── Speech (Silero VAD, MIT) ────────────────────────────────────────────────
+// A small recurrent model: it runs on the CPU in milliseconds per minute of
+// audio, which leaves the GPU to the frames.
+const VAD_URL = 'https://huggingface.co/onnx-community/silero-vad/resolve/e71cae966052b992a7eca6b17738916ce0eca4ec/onnx/model.onnx';
+const VAD_SHA256 = 'a4a068cd6cf1ea8355b84327595838ca748ec29a25bc91fc82e6c299ccdc5808';
+let vadPromise = null;
+
+async function verified(bytes, sha256) {
+    if (!crypto || !crypto.subtle) return bytes;
+    const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes));
+    const hex = Array.from(digest, (b) => b.toString(16).padStart(2, '0')).join('');
+    if (hex !== sha256) throw new Error('speech model does not match its checksum');
+    return bytes;
+}
+
+function vadSession(wasmUrl) {
+    if (!vadPromise) {
+        vadPromise = (async () => {
+            if (wasmUrl) ort.env.wasm.wasmPaths = wasmUrl;
+            ort.env.wasm.numThreads = 1;
+            let bytes;
+            try {
+                bytes = await verified(await modelBytes(VAD_URL), VAD_SHA256);
+            } catch (error) {
+                // A damaged copy in the cache: drop it, download it next time.
+                try { await (await caches.open(MODEL_CACHE)).delete(VAD_URL); } catch { /* no cache */ }
+                throw error;
+            }
+            return ort.InferenceSession.create(bytes, { executionProviders: ['wasm'] });
+        })();
+        vadPromise.catch(() => { vadPromise = null; });
+    }
+    return vadPromise;
+}
+
+// Speech probability per CHUNK samples of 16 kHz mono audio.
+async function speechProbabilities(pcm, wasmUrl) {
+    const model = await vadSession(wasmUrl);
+    let state = new ort.Tensor('float32', new Float32Array(2 * 128), [2, 1, 128]);
+    const sr = new ort.Tensor('int64', BigInt64Array.from([BigInt(RATE)]), []);
+    const count = Math.floor(pcm.length / CHUNK);
+    const probabilities = new Float32Array(count);
+    const input = new Float32Array(CONTEXT + CHUNK);
+    for (let i = 0; i < count; i++) {
+        input.copyWithin(0, CHUNK, CHUNK + CONTEXT);
+        if (i === 0) input.fill(0, 0, CONTEXT);
+        input.set(pcm.subarray(i * CHUNK, (i + 1) * CHUNK), CONTEXT);
+        const out = await model.run({ input: new ort.Tensor('float32', input.slice(), [1, CONTEXT + CHUNK]), state, sr });
+        probabilities[i] = out.output.data[0];
+        state = out.stateN;
+    }
+    return probabilities;
+}
+
 self.onmessage = async (event) => {
     const { id, op } = event.data;
     try {
-        if (op === 'judge') {
+        if (op === 'speech') {
+            const probabilities = await speechProbabilities(event.data.pcm, event.data.wasmUrl);
+            self.postMessage({ id, segments: speechSegments(probabilities, event.data.from || 0) });
+        } else if (op === 'judge') {
             // Both tests on the frames; without the model (no download, no
             // GPU or CPU backend), the dark test alone.
             const frames = event.data;

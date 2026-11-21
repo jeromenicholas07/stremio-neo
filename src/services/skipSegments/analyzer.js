@@ -14,6 +14,8 @@ const store = require('./store');
 const { lookupDatabases } = require('./databases');
 const { fetchChapters, fetchSceneCuts } = require('./chapters');
 const { findPictureCredits } = require('./creditsPicture');
+const { storyEnd, snapStoryEnd, snapWindow } = require('./storyEnd');
+const { speechInWorker } = require('./textDetector');
 const { fuse, landingAfter, STRONG_BIT_ERROR_RATE } = require('./fusion');
 const { getSkipSettings } = require('./settings');
 const { fileKeyOf, orderNeighbours, episodesAhead, fetchEpisodeStreams, pickReferenceStreams, isReadable, sizeOf } = require('./neighbours');
@@ -321,8 +323,13 @@ function fuseForPlayback(evidence) {
         ...(typeof match.rawStart === 'number' ? { rawStart: Math.max(0, match.rawStart + shift) } : {}),
     }));
     const run = evidence.creditsPicture && evidence.creditsPicture.run;
+    const story = evidence.creditsPicture && evidence.creditsPicture.story;
     const creditsPicture = run && (evidence.standIn || evidence.creditsStandIn)
-        ? { ...evidence.creditsPicture, run: { ...run, start: run.start + shift, end: run.end + shift } }
+        ? {
+            ...evidence.creditsPicture,
+            run: { ...run, start: run.start + shift, end: run.end + shift },
+            ...(story ? { story: { ...story, end: story.end + shift } } : {}),
+        }
         : evidence.creditsPicture;
     const segments = fuse({ ...evidence, repetition: moved(evidence.repetition), creditsRepetition: moved(evidence.creditsRepetition), creditsPicture });
     if (!evidence.standIn && !evidence.creditsStandIn) return segments;
@@ -618,6 +625,57 @@ const PICTURE_AFTER_MUSIC = 90;
 const PICTURE_BEFORE_LEARNED = 90;
 const PICTURE_SECONDS = 480;
 const PICTURE_HEAVY_SECONDS = 150;
+const PICTURE_TO_END_SECONDS = 150;
+
+// ── Where the story ends ────────────────────────────────────────────────────
+
+// Speech is listened to from a little before the credits to the end.
+const SPEECH_BEFORE = 10;
+const SPEECH_MAX_SECONDS = 600;
+
+// What people say from `from` to the end of the file (Silero VAD in the
+// worker), read in the analyzer's read queue. Null when it cannot be heard.
+async function speechToEnd(mediaUrl, from, duration, token) {
+    const to = Math.min(Math.floor(duration), from + SPEECH_MAX_SECONDS);
+    const segments = [];
+    for (let start = from; start < to; start += CHUNK_SECONDS) {
+        const seconds = Math.min(CHUNK_SECONDS, to - start);
+        let chunk;
+        try {
+            chunk = await withRead(token, (signal) => extractChunkDirect(mediaUrl, start, seconds, null, 'full', signal));
+        } catch (error) {
+            if (error instanceof Cancelled) throw error;
+            return null;
+        }
+        check(token);
+        const heard = await speechInWorker(chunk.audio, start);
+        check(token);
+        if (!heard) return null;
+        segments.push(...heard);
+    }
+    return segments;
+}
+
+/**
+ * Where the story ends after credits seen in the picture (storyEnd): the
+ * credits start, or the end of the scene still playing or talking under
+ * them, or of a scene after the roll. Null when the picture gave no tail.
+ */
+async function findStoryEnd(mediaUrl, duration, found, token) {
+    if (!found || !found.run || !found.tail || found.tail.frames.length === 0) return null;
+    const { run, tail } = found;
+    const speech = await speechToEnd(mediaUrl, Math.max(0, Math.floor(run.start - SPEECH_BEFORE)), duration, token);
+    const story = storyEnd({ start: run.start, frames: tail.frames, framesFrom: tail.from, fps: tail.fps, speech, duration });
+    const step = 1 / tail.fps;
+    let scene = null;
+    if (story.by !== 'start') {
+        const { from, to } = snapWindow(story, step);
+        scene = await withRead(token, (signal) => fetchSceneCuts(mediaUrl, from, to - from, signal));
+        check(token);
+    }
+    const end = Math.min(snapStoryEnd(story, run.start, step, scene), duration);
+    return { end, by: story.by, words: story.words, live: story.live, roll: story.roll, logos: story.logos, scene: story.scene, heard: speech !== null };
+}
 // Seasons where the picture showed nothing this many times are not read for
 // it again for a while (credits the detector cannot see, or none at all).
 const PICTURE_MISS_LIMIT = 3;
@@ -630,7 +688,10 @@ function pictureWindow(duration, credits, length, heavy) {
     else from = duration - PICTURE_SECONDS;
     from = Math.max(0, Math.max(from, duration - (heavy ? PICTURE_HEAVY_SECONDS : 900)));
     // Shared music that stops well before the end: the credits are inside it.
-    const to = credits && credits.end < duration - 15 ? Math.min(end, credits.start + PICTURE_AFTER_MUSIC) : end;
+    // The window still reaches the end when that is not much further, for
+    // a scene after the credits (storyEnd) and to see the credits run out.
+    const clipped = credits && credits.end < duration - 15 ? Math.min(end, credits.start + PICTURE_AFTER_MUSIC) : end;
+    const to = end - clipped <= PICTURE_TO_END_SECONDS ? end : clipped;
     return { from, to: Math.max(to, Math.min(end, from + 30)) };
 }
 
@@ -708,6 +769,10 @@ async function findCredits(job, mediaUrl, duration, token, evidence, refresh, op
         pictureFailed = found === null;
         if (found) {
             evidence.creditsPicture = { run: found.run, device: found.device };
+            // Where the story really ends: names often run over the last
+            // scene while it still plays.
+            const story = await findStoryEnd(mediaUrl, duration, found, token);
+            if (story) evidence.creditsPicture.story = story;
             // Only a look that could see credits over footage counts as a miss.
             if (found.run || found.device) {
                 await store.setPictureMisses(job.metaId, job.season, found.run ? 0 : (await store.getPictureMisses(job.metaId, job.season)) + 1);
@@ -717,17 +782,22 @@ async function findCredits(job, mediaUrl, duration, token, evidence, refresh, op
     }
 
     const fused = fuse({ ...evidence, duration }).find((segment) => segment.type === 'credits') || null;
+    // Where the credits themselves start (the first card), which can be
+    // before where they are offered (the story end): lengths and the theme
+    // are learned from it.
+    const pictureRun = evidence.creditsPicture && evidence.creditsPicture.run;
+    const creditsStart = fused && pictureRun && fused.sources.includes('picture') ? Math.min(fused.start, pictureRun.start) : fused && fused.start;
     // Seen in this file to the end, or certain: how long this season's
     // credits run (never from the fallback, which only repeats a length).
     const seen = evidence.creditsPicture && evidence.creditsPicture.run && evidence.creditsPicture.run.runsOut === true;
     if (fused && (fused.confidence === 'high' || seen) && !(fused.sources.length === 1 && fused.sources[0] === 'season-length')) {
-        await store.addCreditsLength(job.metaId, job.season, { seconds: duration - fused.start, duration });
+        await store.addCreditsLength(job.metaId, job.season, { seconds: duration - creditsStart, duration });
     }
     // The season's credits music, cut from where the credits start in this
     // file, for later episodes (creditsFromTheme).
     if (played && credits && fused && fused.sources.includes('audio') && (!theme || !theme.confirmed || fused.confidence === 'high')) {
-        const from = Math.max(0, Math.round((fused.start - played.from) * FRAMES_PER_SECOND));
-        const to = Math.round((Math.min(fused.start + CREDITS_THEME_SECONDS, credits.end) - played.from) * FRAMES_PER_SECOND);
+        const from = Math.max(0, Math.round((creditsStart - played.from) * FRAMES_PER_SECOND));
+        const to = Math.round((Math.min(creditsStart + CREDITS_THEME_SECONDS, credits.end) - played.from) * FRAMES_PER_SECOND);
         if (to - from >= 8 * FRAMES_PER_SECOND) {
             await store.setCreditsTheme(job.metaId, job.season, {
                 hashes: played.hashes.slice(from, to),

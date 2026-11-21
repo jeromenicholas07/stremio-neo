@@ -87,6 +87,17 @@ async function readWindow(read, mediaUrl, from, to, fps, judgeWith, atEnd = fals
     return { from, fps, verdicts, small, device };
 }
 
+// How much a coarse frame differs from the one before it (mean absolute
+// difference of the small frames, 0-255): a scene moves, a still card or
+// a slowly panned painting hardly does.
+function changeFrom(small, i) {
+    const size = SMALL_WIDTH * SMALL_HEIGHT;
+    if (i < 1 || (i + 1) * size > small.length) return 0;
+    let sum = 0;
+    for (let p = 0; p < size; p++) sum += Math.abs(small[i * size + p] - small[(i - 1) * size + p]);
+    return Math.round(sum / size);
+}
+
 function concatWindows(before, after) {
     const small = new Uint8Array(before.small.length + after.small.length);
     small.set(before.small);
@@ -225,7 +236,11 @@ async function findPictureCredits({ mediaUrl, duration, from, to, read, check, w
     const tail = {
         from: window.from + tailFrom / window.fps,
         fps: window.fps,
-        frames: window.verdicts.slice(tailFrom).map((verdict) => ({ dark: Boolean(verdict.dark), text: Boolean(verdict.text || verdict.darkText) })),
+        frames: window.verdicts.slice(tailFrom).map((verdict, i) => ({
+            dark: Boolean(verdict.dark),
+            text: Boolean(verdict.text || verdict.darkText),
+            motion: changeFrom(window.small, tailFrom + i),
+        })),
     };
     return { run: { start, end: run.end, runsOut: run.runsOut, solid, coarseStart: run.start }, tail, device: window.device };
 }

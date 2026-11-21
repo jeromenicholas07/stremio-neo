@@ -232,13 +232,14 @@ const useSkipSegments = ({ player, stream, time, duration, buffering, paused, pl
         return credits && durationSeconds !== null && credits.start > durationSeconds / 2 ? Math.round(credits.start * 1000) : null;
     };
     const creditsStart = React.useMemo(() => creditsFrom((confidence) => confidence !== 'low'), [segments, durationSeconds]);
-    // Where to start counting down to the next episode: credits found with
-    // high confidence, when the viewer turned that on. Only with Auto-Pick on
-    // for the show: without it the next episode stops at its streams list.
+    // Where to start counting down to the next episode: where the popup
+    // opens (the story's end, see storyEnd), when the viewer turned that on.
+    // Only with Auto-Pick on for the show: without it the next episode stops
+    // at its streams list.
     const autoNextAt = React.useMemo(() => {
         if (!autoNext || !getPlayableAutoPickSettings(type, metaId)) return null;
-        return creditsFrom((confidence) => confidence === 'high');
-    }, [segments, durationSeconds, autoNext, type, metaId, settingsVersion]);
+        return creditsStart;
+    }, [creditsStart, autoNext, type, metaId, settingsVersion]);
 
     return {
         active: notice === null ? active : null,

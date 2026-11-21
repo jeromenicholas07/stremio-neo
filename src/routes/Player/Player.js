@@ -32,7 +32,7 @@ const createPlayerShellTransport = require('stremio/services/Shell/playerShellTr
 const SkipButton = require('./SkipButton');
 
 // Seconds counted down before auto-next plays the next episode.
-const AUTO_NEXT_COUNTDOWN_SECONDS = 5;
+const AUTO_NEXT_COUNTDOWN_SECONDS = 4;
 const styles = require('./styles');
 const Video = require('./Video');
 const { default: Indicator } = require('./Indicator/Indicator');
@@ -534,7 +534,7 @@ const Player = ({ urlParams, queryParams }) => {
         }
     }, [player.nextVideo, video.state.time, video.state.duration, skipSegments.creditsStart, skipSegments.autoNextAt]);
 
-    // Auto-next: once confidently detected credits start, count down in
+    // Auto-next: once the story is over (the popup opens), count down in
     // media time (pausing pauses it, seeking back before the credits closes
     // the popup and stops it) and play the next episode once. Dismissing the
     // popup cancels it.

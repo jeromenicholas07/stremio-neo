@@ -294,8 +294,8 @@ const ModernUI = forwardRef<HTMLDivElement>((_, ref) => {
         {
             key: 'autoNext',
             label: 'Auto-Play Next Episode',
-            desc: 'When the credits are confirmed, counts down 5 seconds and plays the next episode. Needs Auto-Pick. '
-                + 'When off, the next-episode popup still opens at the credits.',
+            desc: 'When the episode\'s story ends, the next-episode popup opens, counts down 4 seconds and plays the next episode. '
+                + 'Needs Auto-Pick. When off, the popup still opens there.',
         },
     ] as const;
 
