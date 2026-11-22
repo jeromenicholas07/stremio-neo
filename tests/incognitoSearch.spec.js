@@ -53,6 +53,17 @@ describe('search entities', () => {
         expect(v.studio).toMatchObject({ name: 'Vixen' });
     });
 
+    it('takes an exact one-word site next to a performer, but not on its own', async () => {
+        const withShoplyfter = async (kind, q) => (kind === 'sites' && q === 'shoplyfter'
+            ? [{ name: 'Shoplyfter', shortName: 'shoplyfter' }]
+            : lookup(kind, q));
+        const r = await entities.resolve('lena paul shoplyfter', withShoplyfter);
+        expect(names(r)).toEqual(['Lena Paul']);
+        expect(r.studio).toMatchObject({ name: 'Shoplyfter' });
+        expect(r.rest).toEqual([]);
+        expect(await entities.resolve('shoplyfter', withShoplyfter)).toBeNull();
+    });
+
     it('recognises studios, and fixes typos in big studio names', async () => {
         expect(await entities.resolve('tushy', lookup)).toMatchObject({ performers: [], studio: { name: 'Tushy', shortName: 'tushy' } });
         expect((await entities.resolve('brazers', lookup)).studio).toMatchObject({ name: 'Brazzers' });

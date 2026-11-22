@@ -425,6 +425,33 @@ the dev addon on 7000. Playback went through mpv.
     scenes are clip-store uploads (Manyvids, Faphouse, FansDB, OnlyFans-style
     episodes), and none had a torrent. They now rank after studio scenes in
     search and in performer and studio rows, unless they have releases.
+- **"Jenna Foxx Shoplyfter" (2026-11-22): old screen played it, new page
+  didn't.**
+  - The new path did find the release, "Shoplyfter Jenna Foxx 16 10 2019"
+    (listed 349 seeders, 2 live), and attached it to the right scene,
+    "Case No. 7862669".
+  - Real-Debrid had it cached: the check took 1.1 s and the resolve 0.5 s.
+    But the running addon remembered "not cached", because every failed
+    check step counted as "no" for an hour. One cause seen in the live
+    trace: RD's 429 "too many requests" when 6 releases are checked at
+    once.
+  - **Fixed:**
+    - The check now answers yes, no or unknown. Only RD seen downloading
+      from the swarm, or a dead magnet, counts as "no"; unknown expires in
+      2 minutes.
+    - RD calls retry after a 429, and the page checks 3 releases at a time.
+    - Releases RD hasn't confirmed still get RD entries that resolve on
+      play: "[RD download]" for auto-pick when nothing else is playable,
+      otherwise one manual-only entry.
+    - A failed RD play deletes its torrent again.
+  - **Search fixes from the same case:**
+    - Tube results must name the performer or studio the query named, or
+      carry half its words. The query brought 20 unrelated RedTube clips.
+    - An exact one-word site name next to a performer ("shoplyfter")
+      counts as a studio.
+    - The performer's torrent search includes the studio.
+  - **Clearnet copies:** neither Eporner nor RedTube has this 50-minute
+    scene in full, only 5–20 minute edits and compilations.
 - **Lint:** the new UI files add `react/prop-types` errors, like the existing
   Incognito components. All other rules pass.
 

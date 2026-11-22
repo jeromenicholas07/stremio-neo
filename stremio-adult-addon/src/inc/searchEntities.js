@@ -71,12 +71,13 @@ function makeLookups(lookup) {
         return hit ? { name: hit.name, span: text } : null;
     };
     // Studios: typos are forgiven only against the known big studios. Other
-    // sites must match ThePornDB's name exactly, and need two words or more:
-    // measured, "laying it bare" fuzzily became the site "Playing" and
-    // "angela" the site "ANGELA".
-    const studio = async (text) => {
+    // sites must match ThePornDB's name exactly, and need two words or more
+    // (measured: "laying it bare" fuzzily became the site "Playing" and
+    // "angela" the site "ANGELA") — unless the word sits beside a recognised
+    // performer ("jenna foxx shoplyfter"): `beside` allows one exact word.
+    const studio = async (text, { beside = false } = {}) => {
         const local = knownStudio(text);
-        if (!local && !text.includes(' ')) return null;
+        if (!local && !text.includes(' ') && !beside) return null;
         const want = local || text;
         const list = await lookup('sites', want).catch(() => []);
         const exact = (x) => norm(x.name) === norm(want) || norm(x.shortName) === norm(want).replace(/ /g, '');
@@ -153,7 +154,7 @@ async function resolve(query, lookup) {
     const tries = runs.filter((s) => s.text.includes(' ')).slice(0, 4)
         .concat(runs.filter((s) => !s.text.includes(' ') && (s.text === leftover[0] || s.text === leftover[leftover.length - 1])));
     for (const s of tries) {
-        st = await studio(s.text);
+        st = await studio(s.text, { beside: performers.length > 0 });
         if (st) {
             leftover = s.rest.length ? leftover.filter((w) => !s.text.split(' ').includes(w)) : [];
             break;

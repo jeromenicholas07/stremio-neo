@@ -575,12 +575,11 @@ async function entityScenes(resolved) {
         const r = await catalogueOf('studio', st.name, st.shortName || st.name, pages);
         return { titles: r.titles.filter(keep), pending: r.pending };
     }
-    const lists = await Promise.all(names.map((n, i) => catalogueOf(
-        'performer', n,
-        // The lead's torrent search names everyone, so scenes together surface.
-        i === 0 && names.length > 1 ? names.join(' ') : n,
-        pages,
-    )));
+    // The lead's torrent search names everyone (scenes together surface) and
+    // the studio, when given ("Shoplyfter Jenna Foxx" finds what "Jenna
+    // Foxx" alone buries under her 200 best-seeded releases).
+    const leadQuery = [st ? (st.shortName || st.name) : '', ...names].filter(Boolean).join(' ');
+    const lists = await Promise.all(names.map((n, i) => catalogueOf('performer', n, i === 0 ? leadQuery : n, pages)));
     const pending = lists.reduce((n, r) => n + r.pending, 0);
     if (names.length === 1) return { titles: lists[0].titles.filter(keep), pending };
     const together = dedupeScenes(lists.flatMap((r) => r.titles).filter((t) => entities.featuresAll(t, names) && keep(t)));
@@ -594,6 +593,19 @@ function interleave(lists) {
     const max = Math.max(0, ...lists.map((l) => l.length));
     for (let i = 0; i < max; i++) for (const l of lists) if (l[i]) out.push(l[i]);
     return out;
+}
+
+// Tube sites answer multi-word searches loosely: "jenna foxx shoplyfter"
+// brought 20 unrelated RedTube clips ("Just watch this", "Tender and
+// Warm"). A tube result must name a performer or studio the query named, or
+// else carry at least half of the query's words (title, tags, cast).
+const QUERY_STOP = new Set('the a an and of in on with for to my her his your is at by xxx'.split(' '));
+function tubeRelevant(t, query, names) {
+    const hay = norm([t.name, ...(t.tags || []), ...(t.performers || [])].join(' '));
+    if (names.length) return names.some((n) => hay.includes(norm(n)) || hay.replace(/ /g, '').includes(norm(n).replace(/ /g, '')));
+    const words = norm(query).split(' ').filter((w) => w.length > 2 && !QUERY_STOP.has(w));
+    if (!words.length) return true;
+    return words.filter((w) => hay.includes(w)).length >= Math.ceil(words.length / 2);
 }
 
 /**
@@ -627,8 +639,9 @@ async function search(query) {
     const named = resolved
         ? [...resolved.performers.map((p) => ({ kind: 'performer', name: p.name })), ...(resolved.studio ? [{ kind: 'studio', name: resolved.studio.name }] : [])]
         : [];
+    const tube = mergeTube([b, a]).filter((t) => tubeRelevant(t, q, named.map((e) => e.name)));
     return {
-        titles: remember([...pro, ...mergeTube([b, a])]),
+        titles: remember([...pro, ...tube]),
         // Releases still being matched to scenes; the UI asks again.
         pending: (sc.pending || 0) + (ent.pending || 0) + torrentsLate,
         correctedTo: entities.correctedQuery(q, resolved),
