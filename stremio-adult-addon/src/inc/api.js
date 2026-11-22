@@ -169,7 +169,7 @@ function handle(req, res) {
         }
         if (p === '/inc/search') {
             const q = (u.searchParams.get('q') || '').trim();
-            sendJson(req, res, 200, { titles: q ? await catalog.search(q) : [] });
+            sendJson(req, res, 200, q ? await catalog.search(q) : { titles: [], pending: 0 });
             return;
         }
         if (p === '/inc/tags') {

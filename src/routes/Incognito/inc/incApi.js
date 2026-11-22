@@ -58,14 +58,32 @@ async function postJson(path, body) {
 let supportPromise = null;
 let supportFor = '';
 
-/** Resolves true when the running addon has the /inc/* catalog. */
+const SUPPORT_TRIES = 5;
+const SUPPORT_RETRY_MS = 3000;
+
+/**
+ * Resolves true when the running addon has the /inc/* catalog. Only an
+ * answer from the addon is remembered: while it can't be reached (the
+ * launcher still starting it, or a restart) this retries for ~15 s, and a
+ * failed check is asked again next time instead of sticking for the session.
+ */
 function isSupported() {
     const url = getAddonUrl();
     if (!supportPromise || supportFor !== url) {
         supportFor = url;
-        supportPromise = getJson('/version', { timeoutMs: 5000 })
+        const attempt = (n) => getJson('/version', { timeoutMs: 5000 })
             .then((v) => Array.isArray(v && v.endpoints) && v.endpoints.includes('/inc/rows'))
-            .catch(() => false);
+            .catch(() => (n + 1 < SUPPORT_TRIES
+                ? new Promise((r) => setTimeout(r, SUPPORT_RETRY_MS)).then(() => attempt(n + 1))
+                : null));
+        const p = attempt(0).then((ok) => {
+            if (ok === null) {
+                if (supportPromise === p) supportPromise = null;
+                return false;
+            }
+            return ok;
+        });
+        supportPromise = p;
     }
     return supportPromise;
 }

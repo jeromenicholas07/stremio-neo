@@ -13,7 +13,8 @@ const useIncognitoSearch = require('./useIncognitoSearch');
 const IncognitoCard = require('./IncognitoCard');
 const styles = require('./styles');
 
-function IncognitoSearchResults({ query }) {
+// `heading` replaces "Results for …" when the clearnet results sit above.
+function IncognitoSearchResults({ query, heading }) {
     const { results, loading, loadingMore, stale, refreshFailed, hasMore, loadMore } = useIncognitoSearch(query);
     const sentinelRef = React.useRef(null);
 
@@ -46,7 +47,7 @@ function IncognitoSearchResults({ query }) {
         <div className={classnames(styles['search-results-root'], 'animation-fade-in')}>
             <div className={styles['search-results-header']}>
                 <div className={styles['search-results-title']}>
-                    Results for &ldquo;{query}&rdquo;
+                    {heading || <React.Fragment>Results for &ldquo;{query}&rdquo;</React.Fragment>}
                 </div>
                 {stale ? (
                     <div className={styles['search-results-stale']} title="Refreshing in background">

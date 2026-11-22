@@ -509,7 +509,8 @@ async function search(q) {
     const seen = new Set();
     const pro = [...((index && index.titles) || []), ...sc.titles.filter((t) => t.tpdbId)]
         .filter((t) => !seen.has(t.id) && seen.add(t.id));
-    return remember(withAvailability([...pro, ...mergeTube([b, a])]));
+    // `pending`: releases still being matched to scenes; the UI asks again.
+    return { titles: remember(withAvailability([...pro, ...mergeTube([b, a])])), pending: sc.pending || 0 };
 }
 
 let tagCache = null;

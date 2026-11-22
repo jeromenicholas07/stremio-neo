@@ -95,6 +95,20 @@ describe('Claude picks opt-in', () => {
     });
 });
 
+describe('clearnet search sections', () => {
+    const sections = require('../src/routes/Incognito/inc/searchSections');
+    it('puts healthy P2P studio titles first, then other releases, then the rest; tube apart', () => {
+        const t = (id, kind, releaseCount, seeders) => ({ id, kind, releaseCount, seeders });
+        const out = sections([
+            t('none', 'scene', 0, 0), t('weak', 'scene', 2, 3), t('tube1', 'tube'),
+            t('movie', 'movie', 1, 9), t('ok', 'scene', 4, 40), t('none2', 'scene'),
+        ]);
+        expect(out.pro.map((x) => x.id)).toEqual(['movie', 'ok', 'weak', 'none', 'none2']);
+        expect(out.tube.map((x) => x.id)).toEqual(['tube1']);
+        expect(out.playable).toBe(2);
+    });
+});
+
 describe('local signals', () => {
     it('needs repeat evidence, and skips what you already follow', () => {
         taste.recordPlay(scene(1, { performers: ['Once Only'], studio: '', tags: [] }));

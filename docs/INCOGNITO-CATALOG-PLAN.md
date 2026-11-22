@@ -366,7 +366,7 @@ the dev addon on 7000. Playback went through mpv.
   HTTPS-to-127.0.0.1 request, including the addon calls that already work in
   your Shell, so it can't answer this.
 - Shipping. That needs `ADDON_VERSION` and `LAUNCHER_VERSION` bumps.
-- Clearnet results on the search page (search is unchanged).
+- ~~Clearnet results on the search page~~: done 2026-11-22. Search shows the clearnet catalog first (studio scenes and movies, healthy P2P first, then amateur and clips); cards open the title page and its auto-pick. Raw torrent hits stay below under "Torrents". Measured: "Lena Paul" gave 94 studio titles, 56 ready over P2P. Many have only 480p or SD copies seeded.
 - **Lint:** the new UI files add `react/prop-types` errors, like the existing
   Incognito components. All other rules pass.
 

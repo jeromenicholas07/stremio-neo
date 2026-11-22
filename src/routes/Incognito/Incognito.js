@@ -15,6 +15,7 @@ const useIncognitoCustomRows = require('./useIncognitoCustomRows');
 const IncHome = require('./inc/IncHome');
 const IncMetaDetails = require('./inc/IncMetaDetails');
 const IncRowPage = require('./inc/IncRowPage');
+const IncSearchResults = require('./inc/IncSearchResults');
 const { isSupported: isIncSupported } = require('./inc/incApi');
 const styles = require('./styles');
 
@@ -144,7 +145,13 @@ const Incognito = ({ urlParams, queryParams }) => {
                     {renderIcons()}
                 </div>
                 <div className={styles['search-container']}>
-                    <IncognitoSearchResults query={decodeURIComponent(subpageArg)} />
+                    {/* Clearnet catalog first (cards open the title page and
+                        its auto-pick); raw torrent hits stay below. */}
+                    {incSupported ? <IncSearchResults query={decodeURIComponent(subpageArg)} /> : null}
+                    <IncognitoSearchResults
+                        query={decodeURIComponent(subpageArg)}
+                        heading={incSupported ? 'Torrents' : null}
+                    />
                 </div>
             </React.Fragment>
         );
