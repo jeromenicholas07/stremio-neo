@@ -18,6 +18,7 @@ const mdStyles = require('stremio/routes/MetaDetails/styles');
 const { getJson, abs } = require('./incApi');
 const useIncFavorites = require('./useIncFavorites');
 const { encodeStreamForCore } = require('../useIncognitoPlay');
+const { p2pEligibility } = require('./p2pEligibility');
 
 const SOURCES = {
     torrents: { transportUrl: 'incognito://torrents', manifest: { name: 'Torrents' } },
@@ -42,22 +43,10 @@ function playerStream(s) {
     return out;
 }
 
-// Live seeders as the addon reports them ("👤 48"; an unverified listed count
-// reads "👤 ~428 listed" and doesn't match).
-const liveSeeders = (s) => {
-    const m = String(s.description || '').match(/👤\s*(\d+)/);
-    return m ? parseInt(m[1], 10) : 0;
-};
-
-// Auto-pick ranks quality before seeders, and a weak swarm rarely starts, so
-// only healthy P2P streams join its "Main add-on (P2P)" bucket: at least
-// MIN_AUTOPICK_SEEDERS live seeders and a tenth of the best release's count.
-// The rest stay listed for picking by hand.
-const MIN_AUTOPICK_SEEDERS = 5;
-
+// Only P2P streams auto-pick may try join its "Main add-on (P2P)" bucket;
+// the rules (1080p preferred, 4K only as a fallback) are in p2pEligibility.
 async function withDeepLinks(streams, titleId) {
-    const best = Math.max(0, ...streams.filter((s) => s.infoHash).map(liveSeeders));
-    const healthy = (s) => liveSeeders(s) >= Math.max(MIN_AUTOPICK_SEEDERS, Math.ceil(best / 10));
+    const healthy = p2pEligibility(streams);
     return Promise.all(streams.map(async (s) => {
         if (s.externalHref) {
             // A release without an infoHash: the existing torrent screen resolves it.

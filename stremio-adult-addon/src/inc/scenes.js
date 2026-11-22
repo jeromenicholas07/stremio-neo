@@ -194,7 +194,16 @@ const words = (s) => norm(s).split(' ').filter((w) => w.length > 2 && !STOP_WORD
 // releases several scenes on one day, and the "<Studio> yy mm dd" search
 // returns all of them, so a matching date is not enough on its own: the
 // release must also name a performer or most of the title.
+function daysApart(a, b) {
+    const ms = Math.abs(Date.parse(`${a}T00:00:00Z`) - Date.parse(`${b}T00:00:00Z`));
+    return Number.isFinite(ms) ? ms / 86400000 : Infinity;
+}
+
+// TV episodes turn up in general torrent indexes ("… S01E07 … WEB-DL").
+const TV_EPISODE = /\bs\d{1,2}\s?e\d{1,3}\b/i;
+
 function knownSceneMatches(scene, rel) {
+    if (TV_EPISODE.test(String(rel.name || ''))) return false;
     const name = norm(rel.name);
     const compact = name.replace(/ /g, '');
     const performers = (scene.performers || []).map(norm).filter(Boolean);
@@ -205,13 +214,24 @@ function knownSceneMatches(scene, rel) {
     const titleRatio = titleWords.length ? titleWords.filter((w) => have.has(w)).length / titleWords.length : 0;
     const relDate = tpdb.releaseDate(rel.name);
     if (relDate && scene.date) {
-        if (relDate !== scene.date) return false;
-        return performerHit || titleRatio >= 0.5;
+        // Release groups and ThePornDB often disagree by a day (time zones).
+        if (daysApart(relDate, scene.date) <= 1) return performerHit || titleRatio >= 0.5;
+        // A re-release or a mis-dated one: only with the performer and nearly
+        // the whole title ("HardX 21 05 13 Lena Paul 1st Gangbang" for the
+        // 2018 scene). Same-day scenes from one studio never get here.
+        return performerHit && titleWords.length >= 2 && titleRatio >= 0.75;
     }
     // Undated release: most of the title, plus a performer when the title is
-    // too short to identify the scene alone ("Best of ZZ").
-    if (titleRatio < 0.5) return false;
-    return performerHit || titleWords.length >= 3;
+    // too short to identify the scene alone ("Best of ZZ"). A short title
+    // needs every word: half of "1st Gangbang" is just "1st", and "[TUSHY]
+    // Lena Paul, Abella Danger {Anal Sharing} (1st June, 2018)" was attached
+    // to "Lena Paul 1St Gangbang" as its best-seeded release.
+    if (titleRatio < (titleWords.length <= 3 ? 1 : 0.5)) return false;
+    if (performerHit) return true;
+    // No performer named: the whole title, and a title long enough to mean
+    // something ("I Just Want To Love You" took an anime episode, "I Want to
+    // Love You Till Your Dying Day S01E07", on 3 of its 4 words).
+    return titleWords.length >= 3 && titleRatio === 1;
 }
 
 // Does this release belong to the given scene? Used after a targeted search,

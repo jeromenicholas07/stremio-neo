@@ -9,7 +9,7 @@
 
 const React = require('react');
 const IncTitleCard = require('./IncTitleCard');
-const { getJson } = require('./incApi');
+const { getJson, rowPath } = require('./incApi');
 const sections = require('./searchSections');
 const styles = require('./IncSearchResults.less');
 
@@ -41,7 +41,14 @@ function useIncSearch(query) {
         const load = async (attempt) => {
             try {
                 const res = await getJson(`/inc/search?q=${encodeURIComponent(q)}`, { signal: controller.signal, timeoutMs: 90000 });
-                const value = { titles: Array.isArray(res.titles) ? res.titles : [], pending: res.pending || 0 };
+                const value = {
+                    titles: Array.isArray(res.titles) ? res.titles : [],
+                    pending: res.pending || 0,
+                    // A typo the addon corrected ("lena pual" → "Lena Paul"),
+                    // and the performer or studio it recognised.
+                    correctedTo: typeof res.correctedTo === 'string' ? res.correctedTo : null,
+                    entity: res.entity && typeof res.entity.name === 'string' ? res.entity : null,
+                };
                 remember(q, value);
                 setState({ ...value, loading: false, error: false });
                 if (value.pending > 0 && attempt < PENDING_RETRIES) {
@@ -61,7 +68,7 @@ function useIncSearch(query) {
 }
 
 function IncSearchResults({ query }) {
-    const { titles, loading, error, pending } = useIncSearch(query);
+    const { titles, loading, error, pending, correctedTo, entity } = useIncSearch(query);
     const { pro, tube, playable } = React.useMemo(() => sections(titles), [titles]);
 
     return (
@@ -74,6 +81,16 @@ function IncSearchResults({ query }) {
                     </div>
                 ) : null}
             </div>
+            {!loading && (correctedTo || entity) ? (
+                <div className={styles['entity']}>
+                    {correctedTo ? <span>Showing results for &ldquo;{correctedTo}&rdquo;. </span> : null}
+                    {entity ? (
+                        <a href={rowPath(entity.kind === 'performer' ? `perf:${entity.name}` : `studio:${entity.name}`)}>
+                            {entity.kind === 'performer' ? 'All scenes with' : 'All scenes from'} {entity.name} ›
+                        </a>
+                    ) : null}
+                </div>
+            ) : null}
             {loading ? (
                 <div className={styles['message']}>Searching studios, sites and torrents… (this can take 10–20 s)</div>
             ) : error ? (

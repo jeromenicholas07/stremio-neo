@@ -208,6 +208,21 @@ async function cachedList(path, kind, { filter } = {}) {
     return result;
 }
 
+// Performers or sites whose name matches `q` (ThePornDB's own search):
+// [{ id, name, shortName }]. Cached like ids.
+async function lookup(kind, q, perPage = 8) {
+    const key = `${kind}:${norm(q)}:${perPage}`;
+    const hit = store.cacheGet('tpdb-lookup', key, ID_TTL_MS);
+    if (hit !== undefined) return hit;
+    if (!hasToken()) return [];
+    const data = await apiGet(`/${kind}?q=${encodeURIComponent(q)}&per_page=${perPage}`);
+    const list = ((data && Array.isArray(data.data)) ? data.data : [])
+        .map((x) => ({ id: x.id, name: cleanName(x.name), shortName: x.short_name || '' }))
+        .filter((x) => x.id && x.name);
+    if (data) store.cacheSet('tpdb-lookup', key, list);
+    return list;
+}
+
 // Name → ThePornDB id for performers and sites (exact name match preferred).
 async function findId(kind, name) {
     const key = `${kind}:${norm(name)}`;
@@ -270,5 +285,5 @@ async function getMovie(uuid) {
 
 module.exports = {
     hasToken, parseRelease, getScene, getMovie, sceneToTitle, plausible, releaseDate,
-    latestScenes, performerScenes, siteScenes, movies, searchScenes, isClipSite,
+    latestScenes, performerScenes, siteScenes, movies, searchScenes, isClipSite, lookup,
 };

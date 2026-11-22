@@ -226,7 +226,32 @@ describe('Stremio-shaped streams', () => {
         };
         expect(scenes.releaseMatches(scene, { name: 'BrazzersExxtra 20 04 29 Siri And Angela White Sneaky Shower Threesome -XXX' })).toBe(true);
         expect(scenes.releaseMatches(scene, { name: 'BrazzersExxtra 20 04 29 Luna Star All Dolled Up Anal Edition -XXX' })).toBe(false);
-        expect(scenes.releaseMatches(scene, { name: 'BrazzersExxtra 20 04 30 Angela White Sneaky Shower Threesome' })).toBe(false);
+        // A day off (time zones) with the performer and title is the same scene…
+        expect(scenes.releaseMatches(scene, { name: 'BrazzersExxtra 20 04 30 Angela White Sneaky Shower Threesome' })).toBe(true);
+        // …but a different scene the next day is not.
+        expect(scenes.releaseMatches(scene, { name: 'BrazzersExxtra 20 04 30 Luna Star All Dolled Up Anal Edition -XXX' })).toBe(false);
+    });
+
+    it('accepts a re-release under a later date only with the performer and nearly the whole title', () => {
+        const scene = { id: 'inc:scene:g', tpdbId: 'g', kind: 'scene', name: 'Lena Paul 1St Gangbang', date: '2018-12-12', studio: 'Hard X', performers: ['Lena Paul'] };
+        expect(scenes.releaseMatches(scene, { name: 'HardX 21 05 13 Lena Paul 1st Gangbang XXX -LUST' })).toBe(true);
+        expect(scenes.releaseMatches(scene, { name: 'HardX 21 05 13 Lena Paul Anal Workout XXX' })).toBe(false);
+        expect(scenes.releaseMatches(scene, { name: 'HardX 21 05 13 Gina Valentina 1st Gangbang XXX' })).toBe(false);
+        expect(scenes.releaseMatches(scene, { name: 'Lena Paul 1st Gangbang rq' })).toBe(true);
+    });
+
+    it('needs the whole title when an undated release names no performer, and never takes TV episodes', () => {
+        const scene = { id: 'inc:scene:j', tpdbId: 'j', kind: 'scene', name: 'I Just Want To Love You', date: '2023-04-14', studio: 'Pornstars Like It Big', performers: ['Angela White'] };
+        expect(scenes.releaseMatches(scene, { name: 'I Want to Love You Till Your Dying Day S01E07 SUBFRENCH 1080p CR WEB-DL AAC2.0 x264-Tsunde' })).toBe(false);
+        expect(scenes.releaseMatches(scene, { name: 'I Want To Love You XXX 1080p' })).toBe(false);
+        expect(scenes.releaseMatches(scene, { name: 'Pornstars Like It Big I Just Want To Love You XXX 1080p' })).toBe(true);
+        expect(scenes.releaseMatches(scene, { name: 'Angela White I Want To Love You 1080p' })).toBe(true);
+    });
+
+    it('needs every word of a short title in an undated release', () => {
+        const scene = { id: 'inc:scene:g', tpdbId: 'g', kind: 'scene', name: 'Lena Paul 1St Gangbang', date: '2018-12-12', studio: 'Hard X', performers: ['Lena Paul'] };
+        expect(scenes.releaseMatches(scene, { name: '[TUSHY] Lena Paul, Abella Danger {Anal Sharing} (1st June, 2018) (NEW!' })).toBe(false);
+        expect(scenes.releaseMatches(scene, { name: 'HardX   Lena Paul   1st Gangbang' })).toBe(true);
     });
 
     it('needs a performer for an undated release of a short title', () => {
@@ -251,7 +276,16 @@ describe('Stremio-shaped streams', () => {
         expect(releaseQueries({
             kind: 'scene', name: 'Off to College', date: '2023-01-07', studioShort: 'freeusefantasy',
             performers: ['Jordan Maxx', 'Maya Woulfe'],
-        })).toEqual(['freeusefantasy 23 01 07', 'Jordan Maxx Maya Woulfe', 'Jordan Maxx Off to College']);
+        })).toEqual(['freeusefantasy 23 01 07', 'Jordan Maxx Off to College', 'Jordan Maxx Maya Woulfe']);
+    });
+
+    it('searches a title that names its performer as the title alone, not "<performer> <title>"', () => {
+        expect(releaseQueries({
+            kind: 'scene', name: 'Lena Paul 1St Gangbang', date: '2018-12-12', studioShort: 'hardx', performers: ['Lena Paul'],
+        })).toEqual(['hardx 18 12 12', 'Lena Paul 1St Gangbang', 'Lena Paul']);
+        expect(releaseQueries({
+            kind: 'scene', name: 'Thick Lena Paul Serves It Up To Dredd', date: '2020-09-07', studioShort: 'julesjordan', performers: ['Lena Paul', 'Dredd'],
+        })).toEqual(['julesjordan 20 09 07', 'Thick Lena Paul Serves It Up To Dredd', 'Lena Paul Dredd']);
     });
 
     it('matches movie (DVD) releases by most of the title words', () => {

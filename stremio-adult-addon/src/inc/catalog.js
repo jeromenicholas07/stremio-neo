@@ -23,6 +23,7 @@ const store = require('./store');
 const { checkCached } = require('../rd');
 const { liveSwarm } = require('./scrape');
 const taste = require('./taste');
+const entities = require('./searchEntities');
 const { mapLimit } = require('./net');
 
 const TUBE = { ep: eporner, rt: redtube };
@@ -120,18 +121,33 @@ async function availableScenes(page) {
     return sceneRow(results.flatMap((r) => (r && r.metas) || []));
 }
 
-// ThePornDB sometimes lists one scene twice (once per site that sells it):
-// same title, same day. Keep the first.
+// ThePornDB often lists one scene several times, once per site of a network
+// that sells it ("Lena Paul Gets Analized" under Analized, Anal Violation and
+// Full Porn Network): same title, same day. One card per scene, at the first
+// one's place, and the copy with the most releases behind it wins (search
+// mixes listing copies, which have none, with torrent-matched ones).
 function dedupeScenes(titles) {
-    const seen = new Set();
-    return titles.filter((t) => {
-        if (!t) return false;
-        const key = t.kind === 'tube' ? t.id : `${norm(t.name)}|${t.date || ''}`;
-        if (seen.has(key) || seen.has(t.id)) return false;
-        seen.add(key);
-        seen.add(t.id);
-        return true;
-    });
+    const keyOf = (t) => (t.kind === 'tube' || !t.date ? t.id : `${norm(t.name)}|${t.date}`);
+    const best = new Map();
+    for (const t of titles) {
+        if (!t) continue;
+        const k = keyOf(t);
+        const cur = best.get(k);
+        if (!cur || (t.releaseCount || 0) > (cur.releaseCount || 0)) best.set(k, t);
+    }
+    const out = [];
+    const placed = new Set();
+    for (const t of titles) {
+        if (!t) continue;
+        const k = keyOf(t);
+        if (placed.has(k)) continue;
+        const pick = best.get(k);
+        if (placed.has(pick.id)) continue;
+        placed.add(k);
+        placed.add(pick.id);
+        out.push(pick);
+    }
+    return out;
 }
 
 function tpdbRow(result) {
@@ -392,10 +408,18 @@ function releaseQueries(t) {
     const m = String(t.date || '').match(/^\d{2}(\d{2})-(\d{2})-(\d{2})$/);
     const studio = t.studioShort || String(t.studio || '').replace(/\s+/g, '');
     if (studio && m) q.push(`${studio} ${m[1]} ${m[2]} ${m[3]}`);
+    if (t.name) {
+        // "<performer> <title>", unless the title already names them: "Lena
+        // Paul Lena Paul 1st Gangbang" matched nothing, the title alone does.
+        const named = perf.length && norm(t.name).includes(norm(perf[0]));
+        if (perf.length && !named) q.push(`${perf[0]} ${t.name}`);
+        // The bare title catches undated and re-dated releases ("Thick Lena
+        // Paul Serves It Up To Dredd"), when it is distinctive enough.
+        if (named || norm(t.name).split(' ').filter((w) => w.length > 2).length >= 3) q.push(t.name);
+    }
     if (perf.length) q.push(perf.join(' '));
-    if (perf.length && t.name) q.push(`${perf[0]} ${t.name}`);
     if (!q.length && t.searchHint) q.push(t.searchHint);
-    return [...new Set(q)].slice(0, 3);
+    return [...new Set(q)].slice(0, 4);
 }
 
 // A clearnet copy of a studio scene: a tube video naming the lead performer
@@ -498,19 +522,57 @@ async function rdCacheVerdicts(releases) {
     return verdicts;
 }
 
-async function search(q) {
-    const [index, a, b, torrents] = await Promise.all([
+// A performer's or studio's catalogue for search: their ThePornDB listing
+// (two pages when keywords will narrow it) plus the scenes one torrent search
+// for them finds, narrowed to the leftover keywords.
+async function entityScenes(entity) {
+    const pages = entity.rest.length ? [1, 2] : [1];
+    const listingFor = (page) => (entity.kind === 'performer'
+        ? tpdb.performerScenes(entity.name, page)
+        : tpdb.siteScenes(entity.name, page));
+    const torrentQuery = entity.kind === 'studio' && entity.shortName ? entity.shortName : entity.name;
+    const [first, ...more] = await Promise.all([
+        indexRowWithTorrents(listingFor(1), torrentQuery, 1),
+        ...pages.slice(1).map((p) => safe(listingFor(p))),
+    ]);
+    const titles = [...first.titles, ...more.flatMap((r) => (r && r.titles) || [])]
+        .filter((t) => entities.matchesKeywords(t, entity.rest));
+    return { titles, pending: first.pending || 0 };
+}
+
+/**
+ * Search everything: ThePornDB scenes, torrent releases matched to scenes,
+ * tube videos. When part of the query names a performer or studio (typos
+ * included), their catalogue leads, filtered by the other words.
+ * → { titles, pending, correctedTo, entity }
+ */
+async function search(query) {
+    // Release-style queries ("Vixen.23.03.17") search like spaced words.
+    const q = String(query || '').replace(/[._]+/g, ' ').replace(/\s+/g, ' ').trim();
+    const entityP = tpdb.hasToken() ? entities.resolve(q, tpdb.lookup).catch(() => null) : Promise.resolve(null);
+    const [index, a, b, torrents, entity] = await Promise.all([
         safe(tpdb.searchScenes(q)),
         safe(eporner.search(q)),
         safe(redtube.search(q)),
         safe(handleCatalog('adult-search', { search: q })),
+        entityP,
     ]);
-    const sc = await sceneRow((torrents && torrents.metas) || []);
-    const seen = new Set();
-    const pro = [...((index && index.titles) || []), ...sc.titles.filter((t) => t.tpdbId)]
-        .filter((t) => !seen.has(t.id) && seen.add(t.id));
-    // `pending`: releases still being matched to scenes; the UI asks again.
-    return { titles: remember(withAvailability([...pro, ...mergeTube([b, a])])), pending: sc.pending || 0 };
+    const [sc, ent] = await Promise.all([
+        sceneRow((torrents && torrents.metas) || []),
+        entity ? entityScenes(entity).catch(() => ({ titles: [], pending: 0 })) : Promise.resolve({ titles: [], pending: 0 }),
+    ]);
+    const pro = dedupeScenes(withAvailability([
+        ...ent.titles,
+        ...sc.titles.filter((t) => t.tpdbId),
+        ...((index && index.titles) || []),
+    ]));
+    return {
+        titles: remember([...pro, ...mergeTube([b, a])]),
+        // Releases still being matched to scenes; the UI asks again.
+        pending: (sc.pending || 0) + (ent.pending || 0),
+        correctedTo: entities.correctedQuery(q, entity),
+        entity: entity ? { kind: entity.kind, name: entity.name } : null,
+    };
 }
 
 let tagCache = null;

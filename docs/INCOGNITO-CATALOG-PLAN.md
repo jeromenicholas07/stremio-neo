@@ -367,6 +367,43 @@ the dev addon on 7000. Playback went through mpv.
   your Shell, so it can't answer this.
 - Shipping. That needs `ADDON_VERSION` and `LAUNCHER_VERSION` bumps.
 - ~~Clearnet results on the search page~~: done 2026-11-22. Search shows the clearnet catalog first (studio scenes and movies, healthy P2P first, then amateur and clips); cards open the title page and its auto-pick. Raw torrent hits stay below under "Torrents". Measured: "Lena Paul" gave 94 studio titles, 56 ready over P2P. Many have only 480p or SD copies seeded.
+- **Quality, matching and search pass (2026-11-22)**, measured on 20 real
+  titles and 4 searches:
+  - **Auto-pick and 1080p** (`p2pEligibility.js`):
+    - A 1080p copy with at least 5 live seeders qualifies, whatever the
+      best release has.
+    - 4K only qualifies when no 1080p does, and with at least 10 live
+      seeders. Before this, "Green Eyed Monster" picked a 6-seeder 4K over
+      two 1080p copies with 20 or more.
+    - 720p and below keep the relative bar.
+    - Result: 1080p picks went from 7 to 9 of 20, and 4K picks from 1 to 0.
+  - **Matching found two wrong attachments.** These were the best-seeded
+    release, so auto-pick would have played the wrong video:
+    - "Lena Paul 1St Gangbang" carried a Tushy scene, on the words "Lena
+      Paul" and "1st" (from "1st June").
+    - "I Just Want To Love You" carried an anime episode.
+    - Now an undated release needs every word of a short title. With no
+      performer named, it needs the whole title. TV-episode names are
+      rejected.
+  - **Matching missed releases:**
+    - Releases dated a day off now match.
+    - So do re-releases under a later date, when they carry the performer
+      and nearly the whole title.
+    - Title-page searches no longer double the performer's name ("Lena Paul
+      Lena Paul 1st Gangbang"), and add the bare title. "Green Eyed Monster"
+      went from 11 to 19 releases.
+  - **Duplicates:** search merges one scene listed under several of a
+    network's sites (same title, same day), keeping the copy with releases.
+    Same name and date went from 6 to 0.
+  - **Search understands names** (`searchEntities.js`):
+    - It finds a performer or studio in the query, typos included, and
+      filters their catalogue by the remaining words.
+    - Playable results before → after: "lena pual" 0 → 17, "angela whte"
+      0 → 19, "lena paul anal" 2 → 9, "blacked raw" 1 → 7, "brazers" → 38.
+      "tushy" now returns the Tushy studio.
+    - Typos are forgiven only for a list of big studios. Other sites need
+      an exact name of two words or more ("laying it bare" had become the
+      site "Playing").
 - **Lint:** the new UI files add `react/prop-types` errors, like the existing
   Incognito components. All other rules pass.
 
