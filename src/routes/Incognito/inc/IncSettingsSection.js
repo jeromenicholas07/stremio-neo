@@ -1,7 +1,9 @@
 // Settings for the clearnet catalog, shown inside Incognito Settings:
-//   - ThePornDB token (stored by the addon in the shared data folder; the
-//     page never reads it back, it only learns whether one is set)
-//   - favorite performers and categories (add, remove, reorder)
+//   - favorite performers, studios and categories (add, remove, reorder),
+//     each one a row on the Incognito home, in this order
+//   - the ThePornDB token (IncSettingsSection.ThePornDb; stored by the addon
+//     in the shared data folder; the page never reads it back, it only
+//     learns whether one is set)
 
 const React = require('react');
 const classnames = require('classnames');
@@ -17,64 +19,154 @@ function searchPornstars(query, limit) {
     return [...starts, ...contains].slice(0, limit);
 }
 
-function FavoriteList({ styles, items, onRemove, onMove, empty }) {
-    if (!items.length) return <div className={styles['settings-description']}>{empty}</div>;
+// The addon's /inc/config answers only on addons with the clearnet catalog.
+function useIncConfig() {
+    const [config, setConfig] = React.useState({ supported: null, theporndbTokenSet: false });
+    React.useEffect(() => {
+        let alive = true;
+        getJson('/inc/config', { timeoutMs: 5000 })
+            .then((c) => { if (alive) setConfig({ supported: true, theporndbTokenSet: Boolean(c.theporndbTokenSet) }); })
+            .catch(() => { if (alive) setConfig({ supported: false, theporndbTokenSet: false }); });
+        return () => { alive = false; };
+    }, []);
+    return [config, setConfig];
+}
+
+function FavoriteGroup({ styles, title, description, items, onRemove, onMove, empty, placeholder, onAdd, listId, options }) {
+    const [value, setValue] = React.useState('');
+    const add = () => {
+        const n = value.trim();
+        if (n) onAdd(n);
+        setValue('');
+    };
     return (
-        <div className={styles['custom-rows-list']}>
-            {items.map((item, i) => (
-                <div key={item.name} className={styles['custom-row-item']}>
-                    <div className={styles['custom-row-text']}>
-                        <div className={styles['custom-row-name']}>{item.name}</div>
-                    </div>
-                    <button
-                        className={classnames(styles['settings-button'], styles['secondary'])}
-                        onClick={() => onMove(item.name, i - 1)}
-                        disabled={i === 0}
-                        type="button"
-                        title="Move up"
-                    >
-                        {'↑'}
-                    </button>
-                    <button
-                        className={classnames(styles['settings-button'], styles['danger'])}
-                        onClick={() => onRemove(item.name)}
-                        type="button"
-                    >
-                        Remove
-                    </button>
+        <section className={styles['settings-section']}>
+            <div className={styles['settings-section-title']}>{title}</div>
+            {description ? <div className={styles['settings-description']}>{description}</div> : null}
+            {items.length ? (
+                <div className={styles['chips']}>
+                    {items.map((item, i) => (
+                        <span key={item.name} className={styles['chip']}>
+                            <span className={styles['chip-name']} title={item.name}>{item.name}</span>
+                            <button
+                                className={styles['chip-button']}
+                                onClick={() => onMove(item.name, i - 1)}
+                                disabled={i === 0}
+                                type="button"
+                                title="Move earlier"
+                                aria-label={`Move ${item.name} earlier`}
+                            >
+                                {'‹'}
+                            </button>
+                            <button
+                                className={styles['chip-button']}
+                                onClick={() => onRemove(item.name)}
+                                type="button"
+                                title="Remove"
+                                aria-label={`Remove ${item.name}`}
+                            >
+                                {'✕'}
+                            </button>
+                        </span>
+                    ))}
                 </div>
-            ))}
-        </div>
+            ) : (
+                <div className={styles['settings-empty']}>{empty}</div>
+            )}
+            <div className={styles['settings-form-row']}>
+                <input
+                    className={styles['settings-input']}
+                    placeholder={placeholder}
+                    value={value}
+                    onChange={(e) => setValue(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') add(); }}
+                    list={options ? listId : undefined}
+                />
+                {options ? (
+                    <datalist id={listId}>
+                        {options(value).map((s) => <option key={s} value={s} />)}
+                    </datalist>
+                ) : null}
+                <button
+                    className={classnames(styles['settings-button'], styles['primary'])}
+                    onClick={add}
+                    disabled={!value.trim()}
+                    type="button"
+                >
+                    Add
+                </button>
+            </div>
+        </section>
     );
 }
 
 function IncSettingsSection({ styles }) {
     const fav = useIncFavorites();
-    const [supported, setSupported] = React.useState(null);
-    const [tokenSet, setTokenSet] = React.useState(false);
-    const [token, setToken] = React.useState('');
-    const [tokenState, setTokenState] = React.useState('idle'); // idle | saving | saved | error
-    const [performer, setPerformer] = React.useState('');
-    const [tag, setTag] = React.useState('');
-    const [studio, setStudio] = React.useState('');
+    const [{ supported }] = useIncConfig();
     const [tags, setTags] = React.useState([]);
 
     React.useEffect(() => {
         let alive = true;
-        getJson('/inc/config', { timeoutMs: 5000 })
-            .then((c) => { if (alive) { setSupported(true); setTokenSet(Boolean(c.theporndbTokenSet)); } })
-            .catch(() => { if (alive) setSupported(false); });
         getJson('/inc/tags', { timeoutMs: 15000 })
             .then((r) => { if (alive) setTags(Array.isArray(r.tags) ? r.tags : []); })
             .catch(() => { /* picker falls back to free text */ });
         return () => { alive = false; };
     }, []);
 
+    if (supported === false) return null; // older addon: nothing to configure here
+
+    return (
+        <React.Fragment>
+            <FavoriteGroup
+                styles={styles}
+                title="Favorite performers"
+                description="Each one gets a row with their scenes, the ones with torrents first. You can also tap ★ next to a name on any title."
+                items={fav.favorites.performers}
+                onRemove={(n) => fav.togglePerformer(n)}
+                onMove={(n, to) => fav.move('performer', n, to)}
+                onAdd={(n) => { if (!fav.isPerformer(n)) fav.togglePerformer(n); }}
+                empty="No favorite performers yet."
+                placeholder="Add a performer"
+                listId="inc-performer-suggestions"
+                options={(q) => (q.trim() ? searchPornstars(q, 6).filter((n) => !fav.isPerformer(n)) : [])}
+            />
+            <FavoriteGroup
+                styles={styles}
+                title="Favorite studios"
+                description="Each one gets a row with the studio’s scenes. You can also star a studio from its page."
+                items={fav.favorites.studios || []}
+                onRemove={(n) => fav.toggleStudio(n)}
+                onMove={(n, to) => fav.move('studio', n, to)}
+                onAdd={(n) => { if (!fav.isStudio(n)) fav.toggleStudio(n); }}
+                empty="No favorite studios yet."
+                placeholder="Add a studio (e.g. Blacked)"
+            />
+            <FavoriteGroup
+                styles={styles}
+                title="Favorite categories"
+                items={fav.favorites.tags}
+                onRemove={(n) => fav.toggleTag(n)}
+                onMove={(n, to) => fav.move('tag', n, to)}
+                onAdd={(n) => { if (!fav.isTag(n)) fav.toggleTag(n); }}
+                empty="No favorite categories yet."
+                placeholder="Add a category"
+                listId="inc-tag-suggestions"
+                options={() => tags.filter((t) => !fav.isTag(t))}
+            />
+        </React.Fragment>
+    );
+}
+
+function ThePornDb({ styles }) {
+    const [{ supported, theporndbTokenSet: tokenSet }, setConfig] = useIncConfig();
+    const [token, setToken] = React.useState('');
+    const [tokenState, setTokenState] = React.useState('idle'); // idle | saving | saved | error
+
     const saveToken = React.useCallback(async (value) => {
         setTokenState('saving');
         try {
             const c = await postJson('/inc/config', { theporndbToken: value });
-            setTokenSet(Boolean(c.theporndbTokenSet));
+            setConfig({ supported: true, theporndbTokenSet: Boolean(c.theporndbTokenSet) });
             setToken('');
             setTokenState('saved');
         } catch {
@@ -82,128 +174,23 @@ function IncSettingsSection({ styles }) {
         }
     }, []);
 
-    const suggestions = React.useMemo(() => {
-        if (!performer.trim()) return [];
-        return searchPornstars(performer, 6).filter((n) => !fav.isPerformer(n));
-    }, [performer, fav]);
-
-    if (supported === false) return null; // older addon: nothing to configure here
-
-    const addPerformer = (name) => {
-        const n = String(name || '').trim();
-        if (n && !fav.isPerformer(n)) fav.togglePerformer(n);
-        setPerformer('');
-    };
-    const addStudio = (name) => {
-        const n = String(name || '').trim();
-        if (n && !fav.isStudio(n)) fav.toggleStudio(n);
-        setStudio('');
-    };
-    const addTag = (name) => {
-        const n = String(name || '').trim();
-        if (n && !fav.isTag(n)) fav.toggleTag(n);
-        setTag('');
-    };
-
-    const inputStyle = { flex: 1, padding: '0.5rem', background: 'rgba(255,255,255,0.08)', color: '#fff', border: '1px solid rgba(255,255,255,0.15)', borderRadius: '4px' };
+    if (supported === false) return null;
 
     return (
         <React.Fragment>
-            <div className={styles['settings-divider']} />
-            <div className={styles['settings-title']} style={{ fontSize: '1rem' }}>Favorite performers</div>
             <div className={styles['settings-description']}>
-                Each one gets a row with their filmography, scenes with torrents first.
-                You can also tap ★ next to a name on any title.
+                <strong>ThePornDB</strong> ({tokenSet ? 'token set' : 'no token set'}): artwork, performers and
+                descriptions for studio scenes. Paste your API token from theporndb.net (profile → API Tokens).
+                It&rsquo;s saved on this PC only and never shown again.
             </div>
-            <FavoriteList
-                styles={styles}
-                items={fav.favorites.performers}
-                onRemove={(n) => fav.togglePerformer(n)}
-                onMove={(n, to) => fav.move('performer', n, to)}
-                empty="No favorite performers yet."
-            />
-            <div className={styles['custom-row-add']}>
+            <div className={styles['settings-form-row']}>
                 <input
                     className={styles['settings-input']}
-                    placeholder="Add a performer"
-                    value={performer}
-                    onChange={(e) => setPerformer(e.target.value)}
-                    onKeyDown={(e) => { if (e.key === 'Enter') addPerformer(performer); }}
-                    list="inc-performer-suggestions"
-                />
-                <datalist id="inc-performer-suggestions">
-                    {suggestions.map((s) => <option key={s} value={s} />)}
-                </datalist>
-                <button className={classnames(styles['settings-button'], styles['primary'])} onClick={() => addPerformer(performer)} type="button">
-                    Add
-                </button>
-            </div>
-
-            <div className={styles['settings-divider']} />
-            <div className={styles['settings-title']} style={{ fontSize: '1rem' }}>Favorite studios</div>
-            <div className={styles['settings-description']}>
-                Each one gets a row with the studio&rsquo;s catalogue. You can also star a studio from its page.
-            </div>
-            <FavoriteList
-                styles={styles}
-                items={fav.favorites.studios || []}
-                onRemove={(n) => fav.toggleStudio(n)}
-                onMove={(n, to) => fav.move('studio', n, to)}
-                empty="No favorite studios yet."
-            />
-            <div className={styles['custom-row-add']}>
-                <input
-                    className={styles['settings-input']}
-                    placeholder="Add a studio (e.g. Blacked)"
-                    value={studio}
-                    onChange={(e) => setStudio(e.target.value)}
-                    onKeyDown={(e) => { if (e.key === 'Enter') addStudio(studio); }}
-                />
-                <button className={classnames(styles['settings-button'], styles['primary'])} onClick={() => addStudio(studio)} type="button">
-                    Add
-                </button>
-            </div>
-
-            <div className={styles['settings-divider']} />
-            <div className={styles['settings-title']} style={{ fontSize: '1rem' }}>Favorite categories</div>
-            <FavoriteList
-                styles={styles}
-                items={fav.favorites.tags}
-                onRemove={(n) => fav.toggleTag(n)}
-                onMove={(n, to) => fav.move('tag', n, to)}
-                empty="No favorite categories yet."
-            />
-            <div className={styles['custom-row-add']}>
-                <input
-                    className={styles['settings-input']}
-                    placeholder="Add a category"
-                    value={tag}
-                    onChange={(e) => setTag(e.target.value)}
-                    onKeyDown={(e) => { if (e.key === 'Enter') addTag(tag); }}
-                    list="inc-tag-suggestions"
-                />
-                <datalist id="inc-tag-suggestions">
-                    {tags.filter((t) => !fav.isTag(t)).map((t) => <option key={t} value={t} />)}
-                </datalist>
-                <button className={classnames(styles['settings-button'], styles['primary'])} onClick={() => addTag(tag)} type="button">
-                    Add
-                </button>
-            </div>
-
-            <div className={styles['settings-divider']} />
-            <div className={styles['settings-title']} style={{ fontSize: '1rem' }}>ThePornDB</div>
-            <div className={styles['settings-description']}>
-                Artwork, performers and descriptions for studio scenes. Paste your API token from
-                theporndb.net (profile → API Tokens). It&rsquo;s saved on this PC only and never shown again.
-                {' '}{tokenSet ? 'A token is set.' : 'No token set.'}
-            </div>
-            <div style={{ display: 'flex', gap: '0.5rem', margin: '0.5rem 0 1rem' }}>
-                <input
                     type="password"
-                    placeholder={tokenSet ? 'Replace token' : 'ThePornDB API token'}
+                    placeholder={tokenSet ? 'Replace ThePornDB token' : 'ThePornDB API token'}
                     value={token}
                     onChange={(e) => { setToken(e.target.value); setTokenState('idle'); }}
-                    style={inputStyle}
+                    onKeyDown={(e) => { if (e.key === 'Enter' && token.trim()) saveToken(token); }}
                     autoComplete="off"
                 />
                 <button
@@ -227,5 +214,7 @@ function IncSettingsSection({ styles }) {
         </React.Fragment>
     );
 }
+
+IncSettingsSection.ThePornDb = ThePornDb;
 
 module.exports = IncSettingsSection;

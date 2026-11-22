@@ -1,33 +1,142 @@
+// Incognito Settings: a dialog with a fixed header and footer and a
+// scrolling body of sections. Children of the flex columns must not shrink:
+// with a max-height they would otherwise be squashed to ~1px and overlap.
+
 .settings-overlay {
     position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    background: rgba(0, 0, 0, 0.85);
+    inset: 0;
+    background: rgba(0, 0, 0, 0.8);
     z-index: 999;
     display: flex;
     align-items: center;
     justify-content: center;
+    padding: 1rem;
 }
 
 .settings-panel {
     background: var(--color-background-dark2, #1a1a2e);
+    border: 1px solid rgba(255, 255, 255, 0.08);
     border-radius: 1rem;
-    padding: 2rem;
-    min-width: 400px;
-    max-width: 560px;
-    max-height: 90vh;
-    overflow-y: auto;
+    width: 100%;
+    max-width: 44rem;
+    max-height: calc(100vh - 2rem);
     display: flex;
     flex-direction: column;
-    gap: 1.25rem;
+    overflow: hidden;
+    box-shadow: 0 1.5rem 4rem rgba(0, 0, 0, 0.5);
 }
 
-.settings-divider {
-    height: 1px;
-    background: var(--color-surface-light5-20, rgba(255, 255, 255, 0.1));
-    margin: 0.25rem 0;
+.settings-header,
+.settings-footer {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 1rem 1.5rem;
+}
+
+.settings-header {
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.settings-footer {
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+    flex-wrap: wrap;
+    justify-content: flex-end;
+}
+
+.settings-footer-spacer {
+    flex: 1;
+}
+
+.settings-body {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 0.5rem 1.5rem 1.5rem;
+    display: flex;
+    flex-direction: column;
+
+    > * {
+        flex-shrink: 0;
+    }
+}
+
+.settings-title {
+    flex: 1;
+    color: var(--color-surface-light5-90, rgba(255, 255, 255, 0.92));
+    font-size: 1.3rem;
+    font-weight: 600;
+}
+
+.settings-close {
+    flex: none;
+    width: 2.25rem;
+    height: 2.25rem;
+    border: none;
+    border-radius: 50%;
+    background: transparent;
+    color: rgba(255, 255, 255, 0.7);
+    font-size: 1.4rem;
+    line-height: 1;
+    cursor: pointer;
+
+    &:hover {
+        background: rgba(255, 255, 255, 0.1);
+        color: #fff;
+    }
+}
+
+.settings-section {
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+    padding: 1.25rem 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+
+    &:last-child {
+        border-bottom: none;
+    }
+
+    > * {
+        flex-shrink: 0;
+    }
+}
+
+.settings-section-title {
+    color: var(--color-surface-light5-90, rgba(255, 255, 255, 0.92));
+    font-size: 1.05rem;
+    font-weight: 600;
+}
+
+.settings-description {
+    color: var(--color-surface-light5-60, rgba(255, 255, 255, 0.6));
+    font-size: 0.88rem;
+    line-height: 1.5;
+}
+
+.settings-empty {
+    color: rgba(255, 255, 255, 0.4);
+    font-size: 0.85rem;
+    font-style: italic;
+}
+
+.settings-status {
+    font-size: 0.88rem;
+    padding: 0.6rem 0.8rem;
+    border-radius: 0.5rem;
+    background: rgba(255, 255, 255, 0.05);
+    color: rgba(255, 255, 255, 0.7);
+
+    &.connected {
+        color: #2ecc71;
+        background: rgba(46, 204, 113, 0.1);
+    }
+
+    &.disconnected {
+        color: #e74c3c;
+        background: rgba(231, 76, 60, 0.1);
+    }
 }
 
 .settings-badge {
@@ -43,117 +152,140 @@
     letter-spacing: 0.03em;
 }
 
-.settings-title {
-    color: var(--color-surface-light5-90, rgba(255, 255, 255, 0.9));
-    font-size: 1.3rem;
-    font-weight: 600;
-}
-
-.settings-description {
-    color: var(--color-surface-light5-60, rgba(255, 255, 255, 0.6));
-    font-size: 0.9rem;
-    line-height: 1.5;
-}
-
-.settings-status-row {
-    min-height: 1.5rem;
-}
-
-.settings-group {
+// One line of inputs and buttons: the inputs share the width.
+.settings-form-row {
     display: flex;
-    flex-direction: column;
+    flex-wrap: wrap;
     gap: 0.5rem;
-}
+    align-items: center;
 
-.settings-label {
-    color: var(--color-surface-light5-60, rgba(255, 255, 255, 0.6));
-    font-size: 0.85rem;
+    .settings-input {
+        flex: 1 1 12rem;
+        min-width: 0;
+    }
 }
 
 .settings-input {
     background: var(--color-background-dark4, #2a2a4a);
-    border: 1px solid var(--color-surface-light5-20, rgba(255, 255, 255, 0.2));
+    border: 1px solid rgba(255, 255, 255, 0.15);
     border-radius: 0.5rem;
-    color: var(--color-surface-light5-90, rgba(255, 255, 255, 0.9));
-    padding: 0.6rem 0.8rem;
-    font-size: 0.95rem;
+    color: var(--color-surface-light5-90, rgba(255, 255, 255, 0.92));
+    padding: 0.55rem 0.8rem;
+    font-size: 0.92rem;
     outline: none;
-}
 
-.settings-input:focus {
-    border-color: var(--color-primary, #7b5bf5);
-}
+    &::placeholder {
+        color: rgba(255, 255, 255, 0.35);
+    }
 
-.settings-hint {
-    color: var(--color-surface-light5-40, rgba(255, 255, 255, 0.4));
-    font-size: 0.8rem;
-}
-
-.settings-buttons {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.5rem;
-    justify-content: flex-end;
-    margin-top: 0.5rem;
+    &:focus {
+        border-color: var(--color-primary, #7b5bf5);
+    }
 }
 
 .settings-button {
+    flex: none;
     padding: 0.5rem 1rem;
-    border: none;
+    border: 1px solid transparent;
     border-radius: 0.5rem;
-    font-size: 0.9rem;
+    font-size: 0.88rem;
     cursor: pointer;
     transition: background-color 0.15s ease;
     white-space: nowrap;
+
+    &:disabled {
+        opacity: 0.45;
+        cursor: default;
+    }
+
+    &.primary {
+        background: var(--color-primary, #7b5bf5);
+        color: white;
+
+        &:hover:not(:disabled) {
+            background: var(--color-primary-dark, #6a4be4);
+        }
+    }
+
+    &.secondary {
+        background: var(--color-background-dark4, #2a2a4a);
+        color: var(--color-surface-light5-90, rgba(255, 255, 255, 0.92));
+
+        &:hover:not(:disabled) {
+            background: var(--color-background-dark5, #3a3a5a);
+        }
+    }
+
+    &.danger {
+        background: transparent;
+        color: #e74c3c;
+        border-color: rgba(231, 76, 60, 0.6);
+
+        &:hover:not(:disabled) {
+            background: rgba(231, 76, 60, 0.1);
+        }
+    }
+
+    &.small {
+        padding: 0.3rem 0.65rem;
+        font-size: 0.8rem;
+    }
 }
 
-.settings-button.primary {
-    background: var(--color-primary, #7b5bf5);
-    color: white;
+// Favorites as removable chips, in row order.
+.chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
 }
 
-.settings-button.primary:hover {
-    background: var(--color-primary-dark, #6a4be4);
-}
-
-.settings-button.secondary {
+.chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.15rem;
+    max-width: 100%;
+    padding: 0.25rem 0.25rem 0.25rem 0.7rem;
+    border-radius: 1rem;
     background: var(--color-background-dark4, #2a2a4a);
-    color: var(--color-surface-light5-90, rgba(255, 255, 255, 0.9));
-}
-
-.settings-button.secondary:hover {
-    background: var(--color-background-dark5, #3a3a5a);
-}
-
-.settings-button.danger {
-    background: transparent;
-    color: #e74c3c;
-    border: 1px solid #e74c3c;
-}
-
-.settings-button.danger:hover {
-    background: rgba(231, 76, 60, 0.1);
-}
-
-.settings-status {
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    color: rgba(255, 255, 255, 0.9);
     font-size: 0.85rem;
-    padding: 0.5rem 0;
 }
 
-.settings-status.connected {
-    color: #2ecc71;
+.chip-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    margin-right: 0.2rem;
 }
 
-.settings-status.disconnected {
-    color: #e74c3c;
+.chip-button {
+    flex: none;
+    width: 1.5rem;
+    height: 1.5rem;
+    border: none;
+    border-radius: 50%;
+    background: transparent;
+    color: rgba(255, 255, 255, 0.55);
+    font-size: 0.85rem;
+    line-height: 1;
+    cursor: pointer;
+
+    &:hover:not(:disabled) {
+        background: rgba(255, 255, 255, 0.12);
+        color: #fff;
+    }
+
+    &:disabled {
+        opacity: 0.25;
+        cursor: default;
+    }
 }
 
 .custom-rows-list {
     display: flex;
     flex-direction: column;
     gap: 0.4rem;
-    max-height: 14rem;
-    overflow-y: auto;
 }
 
 .custom-row-item {
@@ -161,7 +293,7 @@
     align-items: center;
     gap: 0.5rem;
     background: var(--color-background-dark4, #2a2a4a);
-    border: 1px solid var(--color-surface-light5-20, rgba(255, 255, 255, 0.1));
+    border: 1px solid rgba(255, 255, 255, 0.1);
     border-radius: 0.5rem;
     padding: 0.5rem 0.75rem;
 }
@@ -175,8 +307,8 @@
 }
 
 .custom-row-name {
-    color: var(--color-surface-light5-90, rgba(255, 255, 255, 0.9));
-    font-size: 0.95rem;
+    color: var(--color-surface-light5-90, rgba(255, 255, 255, 0.92));
+    font-size: 0.92rem;
     font-weight: 500;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -184,16 +316,9 @@
 }
 
 .custom-row-query {
-    color: var(--color-surface-light5-40, rgba(255, 255, 255, 0.45));
+    color: rgba(255, 255, 255, 0.45);
     font-size: 0.78rem;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-}
-
-.custom-row-add {
-    display: grid;
-    grid-template-columns: 1fr 1fr auto;
-    gap: 0.5rem;
-    align-items: center;
 }

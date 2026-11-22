@@ -146,152 +146,149 @@ const IncognitoSettings = React.memo(({ onClose, onResetPin }) => {
         }
     }, [onClose]);
 
+    // Esc closes the dialog (unless a suggestion list is open in an input).
+    React.useEffect(() => {
+        const onKey = (event) => {
+            if (event.key === 'Escape' && !event.defaultPrevented) onClose(false);
+        };
+        window.addEventListener('keydown', onKey);
+        return () => window.removeEventListener('keydown', onKey);
+    }, [onClose]);
+
+    const button = (kind) => classnames(styles['settings-button'], styles[kind]);
+
     return (
         <div className={styles['settings-overlay']} onClick={handleOverlayClick}>
-            <div className={styles['settings-panel']}>
-                <div className={styles['settings-title']}>Incognito Settings</div>
-
-                <div className={styles['settings-description']}>
-                    Incognito uses bundled services running locally — no URLs or API keys
-                    to configure. To add or manage indexers, open Prowlarr below.
+            <div className={styles['settings-panel']} role="dialog" aria-modal="true" aria-label="Incognito Settings">
+                <div className={styles['settings-header']}>
+                    <div className={styles['settings-title']}>Incognito Settings</div>
+                    <button className={styles['settings-close']} onClick={() => onClose(false)} type="button" title="Close" aria-label="Close">
+                        {'×'}
+                    </button>
                 </div>
 
-                <div className={styles['settings-status-row']}>
-                    {checking ? (
-                        <div className={styles['settings-status']}>Checking bundled services...</div>
-                    ) : status ? (
+                <div className={styles['settings-body']}>
+                    <section className={styles['settings-section']}>
                         <div className={classnames(styles['settings-status'], {
-                            [styles['connected']]: status.ok,
-                            [styles['disconnected']]: !status.ok,
+                            [styles['connected']]: !checking && status && status.ok,
+                            [styles['disconnected']]: !checking && status && !status.ok,
                         })}>
-                            {status.message}
+                            {checking || !status ? 'Checking bundled services…' : status.message}
                         </div>
-                    ) : null}
-                </div>
+                        <div className={styles['settings-description']}>
+                            Incognito runs on services bundled with Stremio Neo, so there are no URLs to set up.
+                            Torrent indexers are managed in Prowlarr.
+                        </div>
+                    </section>
 
-                <div className={styles['settings-description']} style={{ marginTop: '1rem' }}>
-                    Real-Debrid token (optional). Paste your API token from
-                    real-debrid.com/apitoken to stream through RD — torrents resolve to
-                    HTTPS links playable in the browser without local torrent client.
-                </div>
-                <div style={{ display: 'flex', gap: '0.5rem', margin: '0.5rem 0 1rem' }}>
-                    <input
-                        type="password"
-                        placeholder="Real-Debrid API token"
-                        value={rdToken}
-                        onChange={handleRdTokenChange}
-                        style={{ flex: 1, padding: '0.5rem', background: 'rgba(255,255,255,0.08)', color: '#fff', border: '1px solid rgba(255,255,255,0.15)', borderRadius: '4px' }}
-                    />
-                    <button
-                        className={classnames(styles['settings-button'], styles['primary'])}
-                        onClick={handleSaveRdToken}
-                        type="button"
-                    >
-                        {rdSaved ? 'Saved' : 'Save'}
-                    </button>
-                </div>
+                    <IncSettingsSection styles={styles} />
 
-                <IncSettingsSection styles={styles} />
-
-                <div className={styles['settings-divider']} />
-
-                <div className={styles['settings-title']} style={{ fontSize: '1rem' }}>
-                    Custom Rows
-                </div>
-                <div className={styles['settings-description']}>
-                    Add your own rows to the Incognito home. Each row shows the
-                    search results for a query you set. Results are cached for
-                    24 hours to avoid re-hitting indexers on every visit.
-                </div>
-
-                {customRows.length > 0 ? (
-                    <div className={styles['custom-rows-list']}>
-                        {customRows.map((row) => (
-                            <div key={row.id} className={styles['custom-row-item']}>
-                                <div className={styles['custom-row-text']}>
-                                    <div className={styles['custom-row-name']}>{row.name}</div>
-                                    <div className={styles['custom-row-query']}>query: {row.query}</div>
-                                </div>
-                                <button
-                                    className={classnames(styles['settings-button'], styles['secondary'])}
-                                    onClick={() => handleRefreshRow(row.id)}
-                                    title="Clear cached results so this row is re-fetched on next view"
-                                    type="button"
-                                >
-                                    Refresh
-                                </button>
-                                <button
-                                    className={classnames(styles['settings-button'], styles['danger'])}
-                                    onClick={() => handleRemoveRow(row.id)}
-                                    type="button"
-                                >
-                                    Remove
-                                </button>
+                    <section className={styles['settings-section']}>
+                        <div className={styles['settings-section-title']}>Custom rows</div>
+                        <div className={styles['settings-description']}>
+                            Your own rows on the Incognito home, each showing the torrent results for a query.
+                            Results are kept for 24 hours.
+                        </div>
+                        {customRows.length > 0 ? (
+                            <div className={styles['custom-rows-list']}>
+                                {customRows.map((row) => (
+                                    <div key={row.id} className={styles['custom-row-item']}>
+                                        <div className={styles['custom-row-text']}>
+                                            <div className={styles['custom-row-name']}>{row.name}</div>
+                                            <div className={styles['custom-row-query']}>query: {row.query}</div>
+                                        </div>
+                                        <button
+                                            className={classnames(button('secondary'), styles['small'])}
+                                            onClick={() => handleRefreshRow(row.id)}
+                                            title="Fetch this row again on the next visit"
+                                            type="button"
+                                        >
+                                            Refresh
+                                        </button>
+                                        <button
+                                            className={classnames(button('danger'), styles['small'])}
+                                            onClick={() => handleRemoveRow(row.id)}
+                                            type="button"
+                                        >
+                                            Remove
+                                        </button>
+                                    </div>
+                                ))}
                             </div>
-                        ))}
-                    </div>
-                ) : null}
+                        ) : (
+                            <div className={styles['settings-empty']}>No custom rows yet.</div>
+                        )}
+                        <div className={styles['settings-form-row']}>
+                            <input
+                                type="text"
+                                placeholder="Row title (optional)"
+                                value={newRowName}
+                                onChange={(e) => setNewRowName(e.target.value)}
+                                className={styles['settings-input']}
+                            />
+                            <input
+                                type="text"
+                                placeholder="Search query"
+                                value={newRowQuery}
+                                onChange={(e) => setNewRowQuery(e.target.value)}
+                                onKeyDown={(e) => { if (e.key === 'Enter') handleAddRow(); }}
+                                className={styles['settings-input']}
+                            />
+                            <button className={button('primary')} onClick={handleAddRow} disabled={!newRowQuery.trim()} type="button">
+                                Add row
+                            </button>
+                        </div>
+                    </section>
 
-                <div className={styles['custom-row-add']}>
-                    <input
-                        type="text"
-                        placeholder="Row title (optional)"
-                        value={newRowName}
-                        onChange={(e) => setNewRowName(e.target.value)}
-                        className={styles['settings-input']}
-                    />
-                    <input
-                        type="text"
-                        placeholder="Search query (required)"
-                        value={newRowQuery}
-                        onChange={(e) => setNewRowQuery(e.target.value)}
-                        onKeyDown={(e) => { if (e.key === 'Enter') handleAddRow(); }}
-                        className={styles['settings-input']}
-                    />
-                    <button
-                        className={classnames(styles['settings-button'], styles['primary'])}
-                        onClick={handleAddRow}
-                        disabled={!newRowQuery.trim()}
-                        type="button"
-                    >
-                        Add row
-                    </button>
+                    <section className={styles['settings-section']}>
+                        <div className={styles['settings-section-title']}>Accounts</div>
+                        <div className={styles['settings-description']}>
+                            <strong>Real-Debrid</strong> (optional, {rdToken.trim() ? 'token set' : 'no token set'}): streams
+                            cached torrents instantly over HTTPS. Paste your token from real-debrid.com/apitoken.
+                        </div>
+                        <div className={styles['settings-form-row']}>
+                            <input
+                                className={styles['settings-input']}
+                                type="password"
+                                placeholder="Real-Debrid API token"
+                                value={rdToken}
+                                onChange={handleRdTokenChange}
+                                onKeyDown={(e) => { if (e.key === 'Enter') handleSaveRdToken(); }}
+                                autoComplete="off"
+                            />
+                            <button className={button('primary')} onClick={handleSaveRdToken} type="button">
+                                {rdSaved ? 'Saved' : 'Save'}
+                            </button>
+                        </div>
+                        <IncSettingsSection.ThePornDb styles={styles} />
+                    </section>
                 </div>
 
-                <div className={styles['settings-divider']} />
-
-                <div className={styles['settings-buttons']}>
+                <div className={styles['settings-footer']}>
                     <button
-                        className={classnames(styles['settings-button'], styles['secondary'])}
-                        onClick={handleClearCache}
-                        disabled={clearState === 'clearing'}
-                        title="Drop all cached catalogs, searches, details and search history. Custom row definitions and your Real-Debrid token are kept."
-                        type="button"
-                    >
-                        {clearState === 'clearing' ? 'Clearing…' :
-                            clearState === 'done' ? 'Cleared ✓' :
-                            clearState === 'error' ? 'Clear failed' : 'Clear cache'}
-                    </button>
-                    <button
-                        className={classnames(styles['settings-button'], styles['danger'])}
+                        className={button('danger')}
                         onClick={onResetPin}
                         type="button"
                     >
                         Reset PIN
                     </button>
                     <button
-                        className={classnames(styles['settings-button'], styles['secondary'])}
-                        onClick={handleOpenProwlarr}
+                        className={button('secondary')}
+                        onClick={handleClearCache}
+                        disabled={clearState === 'clearing'}
+                        title="Drop all cached catalogs, searches, details and search history. Favorites, custom rows and tokens are kept."
                         type="button"
                     >
+                        {clearState === 'clearing' ? 'Clearing…' :
+                            clearState === 'done' ? 'Cleared ✓' :
+                                clearState === 'error' ? 'Clear failed' : 'Clear cache'}
+                    </button>
+                    <div className={styles['settings-footer-spacer']} />
+                    <button className={button('secondary')} onClick={handleOpenProwlarr} type="button">
                         Open Prowlarr
                     </button>
-                    <button
-                        className={classnames(styles['settings-button'], styles['primary'])}
-                        onClick={() => onClose(false)}
-                        type="button"
-                    >
-                        Close
+                    <button className={button('primary')} onClick={() => onClose(false)} type="button">
+                        Done
                     </button>
                 </div>
             </div>
