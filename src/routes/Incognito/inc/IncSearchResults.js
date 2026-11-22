@@ -13,8 +13,12 @@ const { getJson } = require('./incApi');
 const sections = require('./searchSections');
 const styles = require('./IncSearchResults.less');
 
+// A cold search (empty release cache) needs about a minute to match all its
+// torrent releases to scenes: measured 2026-11-22 on "Angela White",
+// healthy titles went 0 → 5 → 8 → 14 → 15 → 19 at 8 s steps. Keep asking
+// while anything is pending, for up to ~70 s.
 const PENDING_RETRY_MS = 8000;
-const PENDING_RETRIES = 2;
+const PENDING_RETRIES = 9;
 const MAX_CACHED_QUERIES = 20;
 const cache = new Map(); // query → { titles, pending }
 
