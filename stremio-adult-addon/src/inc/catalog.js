@@ -21,7 +21,7 @@ const scenes = require('./scenes');
 const relay = require('./relay');
 const streamsOut = require('./streams');
 const store = require('./store');
-const { checkCached } = require('../rd');
+const { checkCached, seenDownloading } = require('../rd');
 const { resolveInfoHashFromDownloadUrl, isMetered } = require('../prowlarr');
 const { liveSwarm } = require('./scrape');
 const taste = require('./taste');
@@ -550,12 +550,20 @@ async function withResolvedHashes(releases) {
         await Promise.race([work, new Promise((done) => setTimeout(done, RESOLVE_BUDGET_MS))]);
     }
     // A resolved release may be one another index listed with its hash:
-    // one entry per torrent, the best-seeded listing.
+    // one entry per torrent, the best-seeded listing. Hashless ones found by
+    // several of the title's searches come with different download links
+    // (Prowlarr signs each answer's links), so same indexer + name + size
+    // is one release.
     const byHash = new Map();
+    const hashless = new Set();
     const out = [];
     for (const r of releases) {
         const h = r.infoHash && r.infoHash.toLowerCase();
-        if (!h) { out.push(r); continue; }
+        if (!h) {
+            const k = `${r.indexer}|${r.name}|${r.size || r.sizeLabel || ''}`;
+            if (!hashless.has(k)) { hashless.add(k); out.push(r); }
+            continue;
+        }
         const prev = byHash.get(h);
         if (!prev) { byHash.set(h, r); out.push(r); continue; }
         if ((r.seeders || 0) > (prev.seeders || 0)) {
@@ -574,6 +582,9 @@ async function withLiveCounts(releases) {
     try { live = await liveSwarm(releases.filter((r) => r.infoHash).map((r) => r.infoHash)); } catch { /* keep indexed counts */ }
     for (const r of releases) {
         const l = r.infoHash && live.get(r.infoHash.toLowerCase());
+        // PornoLab's swarm lives on its own tracker, which the public ones
+        // we scrape don't see: their 0 says nothing, so its listed count stays.
+        if (l && !l.seeders && isMetered(r.indexer)) continue;
         if (l) {
             // Update the registry's object too, so row badges follow. The
             // index's count is kept: it says how popular a release is, which
@@ -615,6 +626,9 @@ async function rdCacheVerdicts(releases) {
         const verdict = await checkCached({ infoHash: r.infoHash, title: r.name, token }).catch(() => null);
         verdicts.set(r.infoHash.toLowerCase(), verdict);
     });
+    // Of the "not cached" ones, those RD was seen fetching from a live
+    // swarm: the best candidates for an RD download (streams.unverifiedRd).
+    verdicts.swarm = new Set(top.map((r) => r.infoHash.toLowerCase()).filter((h) => seenDownloading(token, h)));
     return verdicts;
 }
 

@@ -1,0 +1,111 @@
+@import (reference) '~stremio/common/screen-sizes.less';
+
+.page {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1rem;
+    background-color: var(--primary-background-color, #0c0b11);
+    color: #fff;
+}
+
+.card {
+    width: 100%;
+    max-width: 36rem;
+    padding: 2rem;
+    border-radius: 1rem;
+    background-color: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    display: flex;
+    flex-direction: column;
+    gap: 0.9rem;
+
+    @media only screen and (max-width: @minimum) {
+        padding: 1.25rem;
+    }
+}
+
+.headline {
+    font-size: 1.3rem;
+    font-weight: 600;
+}
+
+.release {
+    color: rgba(255, 255, 255, 0.6);
+    font-size: 0.88rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.bar {
+    position: relative;
+    height: 0.5rem;
+    border-radius: 0.25rem;
+    background-color: rgba(255, 255, 255, 0.1);
+    overflow: hidden;
+}
+
+.fill {
+    height: 100%;
+    background-color: var(--primary-accent-color, #7b5bf5);
+    transition: width 0.6s ease;
+}
+
+.fill-busy {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 30%;
+    background-color: var(--primary-accent-color, #7b5bf5);
+    animation: busy 1.4s ease-in-out infinite;
+}
+
+@keyframes busy {
+    0% { left: -30%; }
+    100% { left: 100%; }
+}
+
+.facts {
+    color: rgba(255, 255, 255, 0.75);
+    font-size: 0.92rem;
+    line-height: 1.5;
+}
+
+.problem {
+    color: #e7a33c;
+    font-size: 0.88rem;
+}
+
+.buttons {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.6rem;
+    margin-top: 0.4rem;
+}
+
+.primary,
+.secondary {
+    padding: 0.55rem 1.1rem;
+    border: none;
+    border-radius: 0.5rem;
+    font-size: 0.9rem;
+    cursor: pointer;
+}
+
+.primary {
+    background-color: var(--primary-accent-color, #7b5bf5);
+    color: #fff;
+}
+
+.secondary {
+    background-color: rgba(255, 255, 255, 0.1);
+    color: #fff;
+}
+
+.hint {
+    color: rgba(255, 255, 255, 0.4);
+    font-size: 0.8rem;
+}

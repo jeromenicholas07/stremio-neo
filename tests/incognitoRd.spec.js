@@ -62,10 +62,15 @@ describe('Real-Debrid cache check', () => {
         expect(await rd.checkCached({ infoHash: HASH, title: 'x', token: TOKEN })).toBe(true);
     }, 10000);
 
-    it('says not cached only when RD is seen downloading it, and deletes it', async () => {
+    it('says not cached only when RD is seen downloading it, and parks it for a download job', async () => {
         const calls = fakeRd({ info: listingThen(['downloading']) });
         expect(await rd.checkCached({ infoHash: HASH, title: 'x', token: TOKEN })).toBe(false);
-        expect(deleted(calls)).toBe(true);
+        // Not deleted at once (a re-add would make RD answer "error"): a
+        // download job can take it over, else it's deleted a few minutes later.
+        expect(deleted(calls)).toBe(false);
+        expect(rd.seenDownloading(TOKEN, HASH)).toBe(true);
+        expect(rd.adoptParked(TOKEN, HASH)).toBe('T1');
+        expect(rd.adoptParked(TOKEN, HASH)).toBeNull();
     }, 10000);
 
     it('says not cached for a dead magnet', async () => {

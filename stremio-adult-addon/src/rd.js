@@ -157,7 +157,16 @@ async function getOrCreateListing({ infoHash, title, token }) {
         throw new Error(`addMagnet failed: ${addRes.status} ${addRes.raw?.slice(0, 200)}`);
     }
     const torrentId = addRes.body.id;
+    try {
+        return await waitForListing({ token, torrentId, normalized, cacheKey });
+    } catch (err) {
+        // Don't leave a torrent on the account that nothing will use.
+        await deleteTorrent(token, normalized, torrentId);
+        throw err;
+    }
+}
 
+async function waitForListing({ token, torrentId, normalized, cacheKey }) {
     // Wait up to 15s for RD to populate the file list. Cached magnets
     // populate instantly; uncached ones can take 5-15s while RD finds
     // peers and fetches the metadata. The previous 4.8s budget caused
@@ -404,7 +413,33 @@ const VERDICT_TTL_UNKNOWN_MS = 2 * 60 * 1000;
 const POLLS = 6;
 const POLL_MS = 700;
 
-async function deleteTorrent(token, normalized, torrentId) {
+// Torrents an Incognito download job is fetching (inc/rdJobs.js). Every
+// cleanup path here (a cache check finding it "downloading", a failed play,
+// a slow listing) would otherwise delete the download the user is waiting
+// for; only the job itself removes it (unprotect first).
+const protectedHashes = new Set();
+const protectHash = (h) => protectedHashes.add(String(h).toLowerCase());
+const unprotectHash = (h) => protectedHashes.delete(String(h).toLowerCase());
+const isProtected = (h) => protectedHashes.has(String(h).toLowerCase());
+
+// Hashes whose cache check saw RD fetching them from a live swarm: "not
+// cached", but RD can download them, unlike a dead magnet.
+const swarmSeen = new LRUCache({ max: 3000, ttl: VERDICT_TTL_UNCACHED_MS });
+const seenDownloading = (token, h) => Boolean(token && swarmSeen.get(`${token.slice(0, 8)}:${String(h).toLowerCase()}`));
+
+// A finished download job: RD has the torrent now, and its listing lets
+// /inc/rd play it without adding the magnet a second time.
+function markDownloaded(token, h, torrentId, files) {
+    const normalized = String(h).toLowerCase();
+    const key = `${token.slice(0, 8)}:${normalized}`;
+    cachedVerdicts.set(key, true, { ttl: VERDICT_TTL_CACHED_MS });
+    swarmSeen.delete(key);
+    if (torrentId && Array.isArray(files) && files.length) listingCache.set(key, { torrentId, files, infoHash: normalized });
+}
+
+// `force`: the download job removing its own torrent while still protecting the hash.
+async function deleteTorrent(token, normalized, torrentId, { force = false } = {}) {
+    if (!force && isProtected(normalized)) return;
     listingCache.delete(`${token.slice(0, 8)}:${normalized}`);
     for (const key of resolveCache.keys()) {
         if (key.startsWith(`${token.slice(0, 8)}:${normalized}:`)) resolveCache.delete(key);
@@ -417,6 +452,7 @@ const DEAD_STATUS = /^(magnet_error|error|virus|dead)$/;
 function remember(verdictKey, normalized, verdict, reason) {
     const ttl = verdict === true ? VERDICT_TTL_CACHED_MS : verdict === false ? VERDICT_TTL_UNCACHED_MS : VERDICT_TTL_UNKNOWN_MS;
     cachedVerdicts.set(verdictKey, verdict, { ttl });
+    if (verdict === false && /^downloading/.test(reason)) swarmSeen.set(verdictKey, true);
     console.warn(`[rd] cache check ${normalized.slice(0, 8)}: ${verdict === null ? 'unknown' : verdict ? 'cached' : 'not cached'} (${reason})`);
     return verdict;
 }
@@ -428,6 +464,12 @@ async function checkCached({ infoHash, title, token, budgetMs = 7000 }) {
     const verdictKey = `${token.slice(0, 8)}:${normalized}`;
     const known = cachedVerdicts.get(verdictKey);
     if (known !== undefined) return known;
+    // A download job is fetching it: not cached yet, and not to be touched
+    // (adding the magnet again would make a second copy on the account).
+    if (isProtected(normalized)) {
+        swarmSeen.set(verdictKey, true);
+        return false;
+    }
 
     let timedOut = false;
     const listingPromise = getOrCreateListing({ infoHash: normalized, title, token });
@@ -477,9 +519,40 @@ async function checkCached({ infoHash, title, token, budgetMs = 7000 }) {
         reason = String(err && err.message).slice(0, 80);
     }
 
-    // Never leave a download running on the account for a check.
-    if (verdict !== true) await deleteTorrent(token, normalized, listing.torrentId);
+    // Never leave a download running on the account for a check, with one
+    // exception: a torrent RD is fetching from a live swarm is parked for a
+    // few minutes, because deleting it and adding it again (when the user
+    // then picks "[RD download]") makes RD answer "error" for that hash for
+    // minutes (measured 2026-11-23: fresh add → downloading; re-add right
+    // after the delete, and 30 s later → error). A download job adopts the
+    // parked torrent; otherwise it's deleted when the time is up.
+    if (verdict === false && /^downloading/.test(reason)) park(token, normalized, listing.torrentId);
+    else if (verdict !== true) await deleteTorrent(token, normalized, listing.torrentId);
     return remember(verdictKey, normalized, verdict, reason);
+}
+
+const PARK_MS = 3 * 60 * 1000;
+const parked = new Map(); // `${token8}:${hash}` → { torrentId, timer }
+function park(token, normalized, torrentId) {
+    const key = `${token.slice(0, 8)}:${normalized}`;
+    const prev = parked.get(key);
+    if (prev) clearTimeout(prev.timer);
+    const timer = setTimeout(() => {
+        parked.delete(key);
+        deleteTorrent(token, normalized, torrentId).catch(() => { /* gone already */ });
+    }, PARK_MS);
+    if (timer.unref) timer.unref();
+    parked.set(key, { torrentId, timer });
+}
+
+/** A download job taking over a torrent a cache check parked → its id, or null. */
+function adoptParked(token, h) {
+    const key = `${token.slice(0, 8)}:${String(h).toLowerCase()}`;
+    const p = parked.get(key);
+    if (!p) return null;
+    clearTimeout(p.timer);
+    parked.delete(key);
+    return p.torrentId;
 }
 
 /**
@@ -503,6 +576,15 @@ function _setRdFetch(fn) {
     listingCache.clear();
     resolveCache.clear();
     cachedVerdicts.clear();
+    swarmSeen.clear();
+    protectedHashes.clear();
+    for (const p of parked.values()) clearTimeout(p.timer);
+    parked.clear();
 }
 
-module.exports = { handleResolve, handleFiles, handleResolveUrl, resolveWithRD, checkCached, abandonIfNotReady, _setRdFetch };
+module.exports = {
+    handleResolve, handleFiles, handleResolveUrl, resolveWithRD, checkCached, abandonIfNotReady, _setRdFetch,
+    // For inc/rdJobs.js (download jobs).
+    protectHash, unprotectHash, isProtected, seenDownloading, markDownloaded, adoptParked,
+    _rd: { rdFetch, magnetFor, pickLargestVideoIdx, deleteTorrent },
+};

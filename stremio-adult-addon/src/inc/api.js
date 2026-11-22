@@ -13,6 +13,10 @@ const searchHistory = require('./searchHistory');
 const store = require('./store');
 const streamsOut = require('./streams');
 const { resolveWithRD, abandonIfNotReady } = require('../rd');
+const rdJobs = require('./rdJobs');
+
+// Torrents a previous run's download jobs left on the account.
+setTimeout(() => { rdJobs.cleanupLeftovers(store.getRdToken()).catch(() => { /* next start */ }); }, 5000).unref();
 
 const PERSONAL_ORIGINS = [
     /^https:\/\/jeromenicholas07\.github\.io$/,
@@ -61,7 +65,7 @@ function preflight(req, res, personal) {
     if (personal && !originAllowed(req)) { res.statusCode = 403; res.end(); return; }
     res.writeHead(204, {
         'Access-Control-Allow-Origin': personal ? origin : '*',
-        'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+        'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
         'Access-Control-Allow-Headers': 'Content-Type',
         'Access-Control-Max-Age': '600',
         ...(personal ? { Vary: 'Origin' } : {}),
@@ -109,7 +113,7 @@ function favoriteSnapshot(id) {
 const ENDPOINTS = [
     '/inc/rows', '/inc/row/<id>', '/inc/title/<id>', '/inc/streams/<id>', '/inc/search',
     '/inc/play/<token>', '/inc/rd/<token>', '/inc/img', '/inc/tags', '/inc/favorites', '/inc/config',
-    '/inc/played', '/inc/search-click',
+    '/inc/played', '/inc/search-click', '/inc/rdjob/<token>',
 ];
 
 // Rows built from your favorites and plays answer only the app's own pages.
@@ -122,8 +126,9 @@ function handle(req, res) {
     if (!p.startsWith('/inc/')) return false;
 
     // Search writes your local search history, so it is personal too.
+    // A download job acts on your Real-Debrid account: same origin lock.
     const personal = p === '/inc/favorites' || p === '/inc/config' || p === '/inc/rows' || p === '/inc/played'
-        || p === '/inc/search' || p === '/inc/search-click';
+        || p === '/inc/search' || p === '/inc/search-click' || p.startsWith('/inc/rdjob/');
     if (req.method === 'OPTIONS') { preflight(req, res, personal); return true; }
     if (personal && !originAllowed(req)) { res.statusCode = 403; res.end(); return true; }
 
@@ -139,6 +144,18 @@ function handle(req, res) {
         }
         if ((m = p.match(/^\/inc\/rd\/([^/]+)$/))) {
             await handleRdPlay(req, res, m[1]);
+            return;
+        }
+        if ((m = p.match(/^\/inc\/rdjob\/([^/]+)$/))) {
+            // A Real-Debrid download job (rdJobs.js): POST starts or rejoins
+            // it, GET reports progress, DELETE cancels.
+            const t = streamsOut.parseRdToken(m[1]);
+            if (!t) { sendJson(req, res, 400, { error: 'bad token' }, { personal: true }); return; }
+            let job;
+            if (req.method === 'POST') job = await rdJobs.start({ infoHash: t.h, title: t.n, token: store.getRdToken() });
+            else if (req.method === 'DELETE') job = await rdJobs.cancel(t.h);
+            else job = rdJobs.status(t.h);
+            sendJson(req, res, job ? 200 : 404, { job }, { personal: true });
             return;
         }
         if (p === '/inc/version') {

@@ -50,7 +50,7 @@ const routesRegexp = {
         urlParamsNames: ['stream', 'streamTransportUrl', 'metaTransportUrl', 'type', 'id', 'videoId']
     },
     incognito: {
-        regexp: /^\/incognito(?:\/(details|search|title|row)\/([^/]+))?$/,
+        regexp: /^\/incognito(?:\/(details|search|title|row|rdjob)\/([^/]+))?$/,
         urlParamsNames: ['subpage', 'subpageArg']
     },
     torrent: {

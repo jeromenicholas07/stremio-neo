@@ -15,6 +15,7 @@ const useIncognitoCustomRows = require('./useIncognitoCustomRows');
 const IncHome = require('./inc/IncHome');
 const IncMetaDetails = require('./inc/IncMetaDetails');
 const IncRowPage = require('./inc/IncRowPage');
+const IncRdJob = require('./inc/IncRdJob');
 const IncSearchResults = require('./inc/IncSearchResults');
 const { isSupported: isIncSupported } = require('./inc/incApi');
 const styles = require('./styles');
@@ -68,6 +69,10 @@ const Incognito = ({ urlParams, queryParams }) => {
     // A title is a full page, laid out like Stremio's own details page.
     if (subpage === 'title' && subpageArg) {
         return <IncMetaDetails id={decodeURIComponent(subpageArg)} queryParams={queryParams} />;
+    }
+    // Real-Debrid downloading a release before it plays ("[RD download]").
+    if (subpage === 'rdjob' && subpageArg) {
+        return <IncRdJob token={decodeURIComponent(subpageArg)} queryParams={queryParams} />;
     }
 
     // No addon configured — setup prompt

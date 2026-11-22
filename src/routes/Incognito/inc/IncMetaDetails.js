@@ -55,6 +55,13 @@ async function withDeepLinks(streams, titleId) {
         const stream = playerStream(s);
         try {
             const encoded = await encodeStreamForCore(stream);
+            // ?incognito=<id> lets the Player send a failed auto-pick back here.
+            const playerLink = `#/player/${encodeURIComponent(encoded)}?incognito=${encodeURIComponent(titleId)}`;
+            // An "[RD download]" entry opens the download page first: Real-Debrid
+            // fetches the torrent there, and the page plays `next` once it's ready.
+            const link = s.rdJob
+                ? `#/incognito/rdjob/${encodeURIComponent(s.rdJob)}?title=${encodeURIComponent(titleId)}&next=${encodeURIComponent(playerLink)}`
+                : playerLink;
             // `source` only groups the list and `incognitoP2P` puts P2P streams
             // in auto-pick's "Main add-on (P2P)" bucket; the encoded copy the
             // Player gets leaves both out.
@@ -64,8 +71,7 @@ async function withDeepLinks(streams, titleId) {
                 incognitoP2P: Boolean(stream.infoHash) && healthy(s),
                 // A tube video's own files, or a strong clearnet match: auto-pick may play them.
                 incognitoDirect: s.source === 'clearnet' && s.autoPick === true,
-                // ?incognito=<id> lets the Player send a failed auto-pick back here.
-                deepLinks: { player: `#/player/${encodeURIComponent(encoded)}?incognito=${encodeURIComponent(titleId)}` },
+                deepLinks: { player: link },
             };
         } catch {
             return null;

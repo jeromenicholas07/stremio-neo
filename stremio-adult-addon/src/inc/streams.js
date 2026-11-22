@@ -97,32 +97,52 @@ function describe(release) {
 const listedOf = (r) => (r.listedSeeders !== undefined ? r.listedSeeders : r.seeders) || 0;
 
 /**
- * Real-Debrid entries RD hasn't confirmed (its check said "unknown", or the
- * release wasn't checked), played the way the old torrent screen plays: ask
- * RD on click and wait up to ~20 s. The safety net for a check that couldn't
- * tell; RD often has popular releases even when their swarm is gone.
+ * Real-Debrid entries for releases RD hasn't confirmed it has.
  *   - nothing else playable (no [RD+], no P2P with ≥ 5 live seeders): the
- *     two most popular releases as "[RD download]", which auto-pick tries;
- *   - otherwise one, named so auto-pick leaves it alone (manual only).
+ *     two best candidates as "[RD download]", which auto-pick tries. They
+ *     carry `rdJob`: the title page opens the download page, where RD
+ *     fetches the torrent from the swarm (minutes, even from a seeder or
+ *     two) and playback starts once it has the file. Releases RD was seen
+ *     downloading from a live swarm (`rdCached.swarm`) come first, then the
+ *     ones it couldn't tell about, by seeders. Dead magnets are left out.
+ *   - otherwise one unconfirmed entry, named so auto-pick leaves it alone
+ *     (manual only), asking RD on click and waiting up to ~20 s.
  */
 function unverifiedRd(sorted, { title, rdCached, qualityLabel }) {
     const withHash = sorted.filter((r) => r.infoHash);
     const verdict = (r) => (rdCached ? rdCached.get(r.infoHash.toLowerCase()) : undefined);
+    const swarm = (r) => Boolean(rdCached && rdCached.swarm && rdCached.swarm.has(r.infoHash.toLowerCase()));
     const anyRdPlus = withHash.some((r) => verdict(r) === true);
     const healthyP2P = withHash.some((r) => r.liveChecked && (r.seeders || 0) >= 5);
     const rescue = !anyRdPlus && !healthyP2P;
-    const picks = withHash
-        .filter((r) => verdict(r) !== true && verdict(r) !== false && listedOf(r) >= 1)
-        .sort((a, b) => listedOf(b) - listedOf(a))
-        .slice(0, rescue ? 2 : (anyRdPlus ? 0 : 1));
+    const best = (r) => Math.max(r.seeders || 0, listedOf(r));
+    const picks = rescue
+        ? withHash
+            .filter((r) => verdict(r) !== true && (verdict(r) !== false || swarm(r)) && (best(r) >= 1 || swarm(r)))
+            .sort((a, b) => Number(swarm(b)) - Number(swarm(a)) || best(b) - best(a))
+            .slice(0, 2)
+        : withHash
+            .filter((r) => verdict(r) !== true && verdict(r) !== false && listedOf(r) >= 1)
+            .sort((a, b) => listedOf(b) - listedOf(a))
+            .slice(0, anyRdPlus ? 0 : 1);
     const group = `incognito:${(title && title.id) || ''}`;
-    return picks.map((r) => ({
-        source: 'torrents',
-        name: rescue ? `[RD download] Incognito\n${qualityLabel(r)}` : `RD (unconfirmed)\n${qualityLabel(r)}`,
-        description: `${describe(r)}\nNot confirmed on Real-Debrid: asks RD when played (up to 20 s)`,
-        url: `/inc/rd/${makeRdToken(r)}`,
-        behaviorHints: { bingeGroup: `${group}:rd`, filename: r.name },
-    }));
+    return picks.map((r) => {
+        const token = makeRdToken(r);
+        return rescue ? {
+            source: 'torrents',
+            name: `[RD download] Incognito\n${qualityLabel(r)}`,
+            description: `${describe(r)}\nReal-Debrid downloads it first (a few minutes), then it plays`,
+            url: `/inc/rd/${token}`,
+            rdJob: token,
+            behaviorHints: { bingeGroup: `${group}:rd`, filename: r.name },
+        } : {
+            source: 'torrents',
+            name: `RD (unconfirmed)\n${qualityLabel(r)}`,
+            description: `${describe(r)}\nNot confirmed on Real-Debrid: asks RD when played (up to 20 s)`,
+            url: `/inc/rd/${token}`,
+            behaviorHints: { bingeGroup: `${group}:rd`, filename: r.name },
+        };
+    });
 }
 
 /**
