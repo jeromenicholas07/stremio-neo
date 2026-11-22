@@ -92,22 +92,58 @@ function describe(release) {
     return `${release.name}\n${facts.join(' ')}`;
 }
 
+// How popular a release is on the indexes (the count before the live
+// tracker check replaced `seeders`): what RD's cache follows.
+const listedOf = (r) => (r.listedSeeders !== undefined ? r.listedSeeders : r.seeders) || 0;
+
 /**
- * Torrent releases → RD + P2P streams (best seeded first). An RD stream is
- * only offered for a release Real-Debrid already has cached (`rdCached`, from
- * rd.checkCached): an uncached one would keep the Player waiting while RD
- * downloads, and auto-pick ranks RD first. Those releases stay as P2P.
+ * Real-Debrid entries RD hasn't confirmed (its check said "unknown", or the
+ * release wasn't checked), played the way the old torrent screen plays: ask
+ * RD on click and wait up to ~20 s. The safety net for a check that couldn't
+ * tell; RD often has popular releases even when their swarm is gone.
+ *   - nothing else playable (no [RD+], no P2P with ≥ 5 live seeders): the
+ *     two most popular releases as "[RD download]", which auto-pick tries;
+ *   - otherwise one, named so auto-pick leaves it alone (manual only).
  */
-function fromReleases(releases, { title, rdCached } = {}) {
+function unverifiedRd(sorted, { title, rdCached, qualityLabel }) {
+    const withHash = sorted.filter((r) => r.infoHash);
+    const verdict = (r) => (rdCached ? rdCached.get(r.infoHash.toLowerCase()) : undefined);
+    const anyRdPlus = withHash.some((r) => verdict(r) === true);
+    const healthyP2P = withHash.some((r) => r.liveChecked && (r.seeders || 0) >= 5);
+    const rescue = !anyRdPlus && !healthyP2P;
+    const picks = withHash
+        .filter((r) => verdict(r) !== true && verdict(r) !== false && listedOf(r) >= 1)
+        .sort((a, b) => listedOf(b) - listedOf(a))
+        .slice(0, rescue ? 2 : (anyRdPlus ? 0 : 1));
+    const group = `incognito:${(title && title.id) || ''}`;
+    return picks.map((r) => ({
+        source: 'torrents',
+        name: rescue ? `[RD download] Incognito\n${qualityLabel(r)}` : `RD (unconfirmed)\n${qualityLabel(r)}`,
+        description: `${describe(r)}\nNot confirmed on Real-Debrid: asks RD when played (up to 20 s)`,
+        url: `/inc/rd/${makeRdToken(r)}`,
+        behaviorHints: { bingeGroup: `${group}:rd`, filename: r.name },
+    }));
+}
+
+/**
+ * Torrent releases → RD + P2P streams (best seeded first).
+ *   - "[RD+]" for releases Real-Debrid confirmed it has (`rdCached` true,
+ *     from rd.checkCached): instant;
+ *   - unconfirmed RD entries when RD is set up (`rdEnabled`), see
+ *     unverifiedRd;
+ *   - every release with an infoHash as P2P.
+ */
+function fromReleases(releases, { title, rdCached, rdEnabled = false } = {}) {
     const out = [];
     // Live-checked releases by live seeders, then the unverified ones (by
     // their listed count) — unless nothing could be checked at all.
     const anyLive = (releases || []).some((r) => r.liveChecked);
     const rank = (r) => (anyLive ? (r.liveChecked ? r.seeders || 0 : -1) : r.seeders || 0);
     const sorted = (releases || []).slice().sort((a, b) => rank(b) - rank(a) || (b.seeders || 0) - (a.seeders || 0));
+    const qualityLabel = (r) => qualityOf(r.quality) || qualityOf(r.name) || estimateQuality(r, title && title.duration) || 'SD';
+    if (rdEnabled) out.push(...unverifiedRd(sorted, { title, rdCached, qualityLabel }));
     for (const r of sorted) {
-        const q = qualityOf(r.quality) || qualityOf(r.name) || estimateQuality(r, title && title.duration);
-        const qLabel = q || 'SD';
+        const qLabel = qualityLabel(r);
         const description = describe(r);
         const group = `incognito:${(title && title.id) || ''}`;
         if (r.infoHash) {

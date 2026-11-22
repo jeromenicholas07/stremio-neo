@@ -12,7 +12,7 @@ const taste = require('./taste');
 const searchHistory = require('./searchHistory');
 const store = require('./store');
 const streamsOut = require('./streams');
-const { resolveWithRD } = require('../rd');
+const { resolveWithRD, abandonIfNotReady } = require('../rd');
 
 const PERSONAL_ORIGINS = [
     /^https:\/\/jeromenicholas07\.github\.io$/,
@@ -81,9 +81,13 @@ async function handleRdPlay(req, res, tokenStr) {
     if (!t) { res.statusCode = 400; res.end('bad token'); return; }
     const rdToken = store.getRdToken();
     if (!rdToken) { res.statusCode = 503; res.end('Real-Debrid token not set in Incognito Settings'); return; }
+    // A torrent RD couldn't get ready is deleted again, so auto-pick retries
+    // (or "[RD download]" attempts) never stack downloads on the account.
+    const resolving = resolveWithRD({ infoHash: t.h, title: t.n, token: rdToken, readyTimeoutMs: 12000 });
+    resolving.catch(() => abandonIfNotReady({ infoHash: t.h, token: rdToken }));
     try {
         const result = await Promise.race([
-            resolveWithRD({ infoHash: t.h, title: t.n, token: rdToken, readyTimeoutMs: 12000 }),
+            resolving,
             new Promise((_, reject) => setTimeout(() => reject(new Error('Real-Debrid is still downloading this torrent')), RD_WAIT_MS)),
         ]);
         res.writeHead(302, { Location: result.url, 'Cache-Control': 'no-store', 'Access-Control-Allow-Origin': '*' });

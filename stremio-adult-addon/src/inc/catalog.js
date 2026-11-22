@@ -479,7 +479,7 @@ async function streams(id, fallback) {
         // No pre-warming: opening a title doesn't touch any swarm. The
         // streaming server joins one only when Play (or auto-pick) starts it.
         const [releases, rdCached] = await Promise.all([withLiveCounts(found), rdCacheVerdicts(found)]);
-        return [...streamsOut.fromReleases(releases, { title: t, rdCached }), ...clearnet];
+        return [...streamsOut.fromReleases(releases, { title: t, rdCached, rdEnabled: Boolean(store.getRdToken()) }), ...clearnet];
     }
     return [];
 }
@@ -493,7 +493,10 @@ async function withLiveCounts(releases) {
     for (const r of releases) {
         const l = r.infoHash && live.get(r.infoHash.toLowerCase());
         if (l) {
-            // Update the registry's object too, so row badges follow.
+            // Update the registry's object too, so row badges follow. The
+            // index's count is kept: it says how popular a release is, which
+            // is what Real-Debrid's cache follows.
+            if (r.listedSeeders === undefined) r.listedSeeders = r.seeders || 0;
             r.seeders = l.seeders;
             r.peers = l.leechers;
             r.liveChecked = true;
@@ -518,14 +521,18 @@ async function rdCacheVerdicts(releases) {
     const verdicts = new Map();
     const token = store.getRdToken();
     if (!token) return verdicts;
+    // Most popular on the indexes first (the listed count, not the live one).
+    const listed = (r) => (r.listedSeeders !== undefined ? r.listedSeeders : r.seeders) || 0;
     const top = releases
         .filter((r) => r.infoHash)
-        .sort((a, b) => (b.seeders || 0) - (a.seeders || 0))
+        .sort((a, b) => listed(b) - listed(a))
         .slice(0, RD_CHECKS);
-    await Promise.all(top.map(async (r) => {
-        const cached = await checkCached({ infoHash: r.infoHash, title: r.name, token }).catch(() => false);
-        verdicts.set(r.infoHash.toLowerCase(), cached);
-    }));
+    // Three at a time: six at once drew 429s from RD (measured 2026-11-22).
+    await mapLimit(top, 3, async (r) => {
+        // true / false / null (couldn't tell, see rd.checkCached).
+        const verdict = await checkCached({ infoHash: r.infoHash, title: r.name, token }).catch(() => null);
+        verdicts.set(r.infoHash.toLowerCase(), verdict);
+    });
     return verdicts;
 }
 
