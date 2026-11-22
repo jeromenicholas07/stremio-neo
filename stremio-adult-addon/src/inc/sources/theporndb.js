@@ -26,15 +26,19 @@ const SCENE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const CONCURRENCY = 3;
 
 let active = 0;
-const waiting = [];
+// Two queues: what a page is waiting on (performer/site lookups, listings,
+// searches, scenes) goes ahead of background release-name parsing, which
+// can queue hundreds of calls. With one queue a search for two performers
+// sat behind every parse its own torrent results had started (measured: 75 s).
+const waiting = { high: [], low: [] };
 let pausedUntil = 0;
 
-async function slot() {
+async function slot(priority = 'high') {
     if (active < CONCURRENCY) { active++; return; }
-    await new Promise((resolve) => waiting.push(resolve));
+    await new Promise((resolve) => waiting[priority === 'low' ? 'low' : 'high'].push(resolve));
 }
 function release() {
-    const next = waiting.shift();
+    const next = waiting.high.shift() || waiting.low.shift();
     if (next) next(); else active--;
 }
 
@@ -42,10 +46,10 @@ function hasToken() {
     return Boolean(store.getTpdbToken());
 }
 
-async function apiGet(path) {
+async function apiGet(path, { priority = 'high' } = {}) {
     const token = store.getTpdbToken();
     if (!token) return null;
-    await slot();
+    await slot(priority);
     try {
         const wait = pausedUntil - Date.now();
         if (wait > 0) await net.sleep(wait);
@@ -146,7 +150,7 @@ async function parseRelease(name, { cachedOnly = false } = {}) {
     const p = (async () => {
         let title = null;
         try {
-            const data = await apiGet('/scenes?parse=' + encodeURIComponent(name) + '&per_page=1');
+            const data = await apiGet('/scenes?parse=' + encodeURIComponent(name) + '&per_page=1', { priority: 'low' });
             const scene = data && Array.isArray(data.data) ? data.data[0] : null;
             if (plausible(name, scene)) title = sceneToTitle(scene);
         } catch {

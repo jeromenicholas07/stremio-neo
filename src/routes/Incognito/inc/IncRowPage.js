@@ -8,11 +8,13 @@ const IncTitleCard = require('./IncTitleCard');
 const useIncFavorites = require('./useIncFavorites');
 const { useIncRowPages } = require('./useIncRows');
 const { rowName } = require('./incApi');
+const useGridZoom = require('./useGridZoom');
 const styles = require('./IncRowPage.less');
 
 function IncRowPage({ rowId }) {
     const fav = useIncFavorites();
     const { titles, loading, done, more } = useIncRowPages(rowId);
+    const [zoomRef, gridStyle] = useGridZoom();
     const sentinel = React.useRef(null);
     const performer = rowId.startsWith('perf:') ? rowId.slice(5) : null;
     const studio = rowId.startsWith('studio:') ? rowId.slice(7) : null;
@@ -42,7 +44,7 @@ function IncRowPage({ rowId }) {
     const toggleStar = () => (performer ? fav.togglePerformer(performer) : studio ? fav.toggleStudio(studio) : fav.toggleTag(tag));
 
     return (
-        <div className={styles['page']}>
+        <div ref={zoomRef} className={styles['page']}>
             <div className={styles['header']}>
                 <button type="button" className={styles['back']} onClick={goBack}><Icon name="chevron-back" /> Back</button>
                 <div className={styles['title']}>{rowName(rowId)}</div>
@@ -56,7 +58,7 @@ function IncRowPage({ rowId }) {
                     </button>
                 ) : null}
             </div>
-            <div className={styles['grid']}>
+            <div className={styles['grid']} style={gridStyle}>
                 {list.map((t) => <IncTitleCard key={t.id} {...t} />)}
             </div>
             {!loading && list.length === 0 ? <div className={styles['message']}>Nothing here yet.</div> : null}

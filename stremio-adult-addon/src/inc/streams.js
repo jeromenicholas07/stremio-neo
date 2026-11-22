@@ -45,6 +45,24 @@ function qualityOf(text) {
     return '';
 }
 
+function sizeBytes(r) {
+    if (Number(r && r.size) > 0) return Number(r.size);
+    const m = /([\d.]+)\s*(GiB|GB|MiB|MB)/i.exec((r && r.sizeLabel) || '');
+    return m ? parseFloat(m[1]) * (/^g/i.test(m[2]) ? 1e9 : 1e6) : 0;
+}
+
+// Untagged releases: only a size that can only be HD gets a label. Measured
+// 2026-11-22 on ~300 tagged releases (bit rate = size × 8 / scene length):
+// 480p ≈ 1.1 Mbps, 720p ≈ 1.4 (p90 2.0), 1080p HEVC ≈ 2.0 (p90 2.5), 1080p
+// H.264 ≈ 11.6, 4K ≈ 23 (p10 18). Below ~6 Mbps the qualities overlap, so
+// nothing is guessed there; above 15 it could be 4K or a multi-scene pack.
+function estimateQuality(r, durationSec) {
+    const bytes = sizeBytes(r);
+    if (!bytes || !(durationSec >= 300)) return '';
+    const mbps = (bytes * 8) / durationSec / 1e6;
+    return mbps >= 6 && mbps <= 15 ? '~1080p' : '';
+}
+
 // "<payload>.<signature>": only links this addon handed out are honoured.
 function makeRdToken(release) {
     const payload = base64UrlEncode(JSON.stringify({ h: release.infoHash, n: String(release.name || '').slice(0, 160) }));
@@ -88,7 +106,7 @@ function fromReleases(releases, { title, rdCached } = {}) {
     const rank = (r) => (anyLive ? (r.liveChecked ? r.seeders || 0 : -1) : r.seeders || 0);
     const sorted = (releases || []).slice().sort((a, b) => rank(b) - rank(a) || (b.seeders || 0) - (a.seeders || 0));
     for (const r of sorted) {
-        const q = qualityOf(r.quality) || qualityOf(r.name);
+        const q = qualityOf(r.quality) || qualityOf(r.name) || estimateQuality(r, title && title.duration);
         const qLabel = q || 'SD';
         const description = describe(r);
         const group = `incognito:${(title && title.id) || ''}`;
@@ -137,4 +155,4 @@ function fromDirect(site, siteName, siteId, files, makePlayToken, { label } = {}
     }));
 }
 
-module.exports = { fromReleases, fromDirect, makeRdToken, parseRdToken, qualityOf, TRACKERS };
+module.exports = { fromReleases, fromDirect, makeRdToken, parseRdToken, qualityOf, estimateQuality, TRACKERS };

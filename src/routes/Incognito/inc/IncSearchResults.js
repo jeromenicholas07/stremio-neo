@@ -9,8 +9,9 @@
 
 const React = require('react');
 const IncTitleCard = require('./IncTitleCard');
-const { getJson, rowPath } = require('./incApi');
+const { getJson, postJson, rowPath } = require('./incApi');
 const sections = require('./searchSections');
+const useGridZoom = require('./useGridZoom');
 const styles = require('./IncSearchResults.less');
 
 // A cold search (empty release cache) needs about a minute to match all its
@@ -45,9 +46,13 @@ function useIncSearch(query) {
                     titles: Array.isArray(res.titles) ? res.titles : [],
                     pending: res.pending || 0,
                     // A typo the addon corrected ("lena pual" → "Lena Paul"),
-                    // and the performer or studio it recognised.
+                    // the performers / studio it recognised, and how many
+                    // leading results feature every named performer.
                     correctedTo: typeof res.correctedTo === 'string' ? res.correctedTo : null,
-                    entity: res.entity && typeof res.entity.name === 'string' ? res.entity : null,
+                    entities: Array.isArray(res.entities)
+                        ? res.entities.filter((e) => e && typeof e.name === 'string')
+                        : (res.entity && typeof res.entity.name === 'string' ? [res.entity] : []),
+                    together: Number(res.together) || 0,
                 };
                 remember(q, value);
                 setState({ ...value, loading: false, error: false });
@@ -67,28 +72,45 @@ function useIncSearch(query) {
     return state;
 }
 
+const nameList = (names) => (names.length <= 2 ? names.join(' & ') : `${names.slice(0, -1).join(', ')} & ${names[names.length - 1]}`);
+
 function IncSearchResults({ query }) {
-    const { titles, loading, error, pending, correctedTo, entity } = useIncSearch(query);
-    const { pro, tube, playable } = React.useMemo(() => sections(titles), [titles]);
+    const { titles, loading, error, pending, correctedTo, entities = [], together: togetherCount } = useIncSearch(query);
+    const { together, pro, tube, playable, scenes } = React.useMemo(() => sections(titles, togetherCount), [titles, togetherCount]);
+    const performers = entities.filter((e) => e.kind === 'performer').map((e) => e.name);
+    const [zoomRef, gridStyle] = useGridZoom();
+
+    // Search history (kept by the local addon only): which result was opened,
+    // and at what position on the page.
+    const shown = React.useMemo(() => [...together, ...pro, ...tube], [together, pro, tube]);
+    const onClickCapture = React.useCallback((event) => {
+        const a = event.target && event.target.closest && event.target.closest('a[href*="#/incognito/title/"]');
+        if (!a || (event.target.closest && event.target.closest('button'))) return;
+        const id = decodeURIComponent(a.getAttribute('href').split('#/incognito/title/')[1] || '');
+        const rank = shown.findIndex((t) => t.id === id);
+        const title = shown[rank];
+        if (!title) return;
+        postJson('/inc/search-click', { q: query, title: { id: title.id, name: title.name }, rank }).catch(() => { /* older addon */ });
+    }, [shown, query]);
 
     return (
-        <div className={styles['root']}>
+        <div ref={zoomRef} className={styles['root']} onClickCapture={onClickCapture}>
             <div className={styles['header']}>
                 <div className={styles['title']}>Results for &ldquo;{query}&rdquo;</div>
-                {!loading && pro.length ? (
+                {!loading && scenes ? (
                     <div className={styles['meta']}>
-                        {playable} of {pro.length} studio titles ready to play over P2P{pending > 0 ? ' · still matching torrents…' : ''}
+                        {playable} of {scenes} studio titles ready to play over P2P{pending > 0 ? ' · still matching torrents…' : ''}
                     </div>
                 ) : null}
             </div>
-            {!loading && (correctedTo || entity) ? (
+            {!loading && (correctedTo || entities.length) ? (
                 <div className={styles['entity']}>
                     {correctedTo ? <span>Showing results for &ldquo;{correctedTo}&rdquo;. </span> : null}
-                    {entity ? (
-                        <a href={rowPath(entity.kind === 'performer' ? `perf:${entity.name}` : `studio:${entity.name}`)}>
-                            {entity.kind === 'performer' ? 'All scenes with' : 'All scenes from'} {entity.name} ›
+                    {entities.map((e) => (
+                        <a key={`${e.kind}:${e.name}`} href={rowPath(e.kind === 'performer' ? `perf:${e.name}` : `studio:${e.name}`)}>
+                            {e.kind === 'performer' ? 'All scenes with' : 'All scenes from'} {e.name} ›
                         </a>
-                    ) : null}
+                    ))}
                 </div>
             ) : null}
             {loading ? (
@@ -99,10 +121,24 @@ function IncSearchResults({ query }) {
                 <div className={styles['message']}>No catalog results for &ldquo;{query}&rdquo;.</div>
             ) : (
                 <React.Fragment>
+                    {performers.length > 1 ? (
+                        <section className={styles['section']}>
+                            <div className={styles['section-title']}>Scenes with {nameList(performers)}</div>
+                            {together.length ? (
+                                <div className={styles['grid']} style={gridStyle}>
+                                    {together.map((t) => <IncTitleCard key={t.id} {...t} />)}
+                                </div>
+                            ) : (
+                                <div className={styles['note']}>No scene with all of them found; their own scenes are below.</div>
+                            )}
+                        </section>
+                    ) : null}
                     {pro.length ? (
                         <section className={styles['section']}>
-                            <div className={styles['section-title']}>Studio scenes &amp; movies</div>
-                            <div className={styles['grid']}>
+                            <div className={styles['section-title']}>
+                                {performers.length > 1 ? `More with ${nameList(performers)}` : 'Studio scenes & movies'}
+                            </div>
+                            <div className={styles['grid']} style={gridStyle}>
                                 {pro.map((t) => <IncTitleCard key={t.id} {...t} />)}
                             </div>
                         </section>
@@ -110,7 +146,7 @@ function IncSearchResults({ query }) {
                     {tube.length ? (
                         <section className={styles['section']}>
                             <div className={styles['section-title']}>Amateur &amp; clips</div>
-                            <div className={styles['grid']}>
+                            <div className={styles['grid']} style={gridStyle}>
                                 {tube.map((t) => <IncTitleCard key={t.id} {...t} />)}
                             </div>
                         </section>

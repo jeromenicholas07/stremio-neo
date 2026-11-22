@@ -13,6 +13,7 @@
 
 const store = require('./store');
 const favorites = require('./favorites');
+const searchHistory = require('./searchHistory');
 
 const PLAYS_FILE = 'plays.json';
 const PICKS_FILE = 'claude-picks.json';
@@ -109,6 +110,8 @@ function tasteSnapshot() {
         },
         // Ids are addon-internal; the picks run only needs names.
         plays: plays().map((p) => ({ ...p, id: undefined })),
+        // What you searched for (queries and recognised names only).
+        searches: searchHistory.recent(50).map((s) => ({ q: s.q, at: s.at, entities: s.entities })),
     };
 }
 

@@ -58,58 +58,109 @@ function knownStudio(text) {
     return KNOWN_STUDIOS.find((s) => closeName(text, s)) || null;
 }
 
-/**
- * Resolve the query to { kind: 'performer'|'studio', name, span, rest } or
- * null. `lookup(kind, text)` is ThePornDB's performer/site search
- * ([{ name, shortName }]). Tries the whole query first and stops there when
- * it is a name, so the common case costs one round of lookups.
- */
-async function resolve(query, lookup) {
-    const performerSpans = spans(query, { minWords: 2, max: 3 });
-    // Studio names are often one word at either end ("vixen laying it
-    // bare"), so the first and last words are always tried too.
-    const all = spans(query, { minWords: 1, max: 20 });
-    const siteSpans = all.slice(0, 5);
-    const w = norm(query).split(' ').filter(Boolean);
-    for (const edge of all.filter((s) => s.text === w[0] || s.text === w[w.length - 1])) {
-        if (!siteSpans.includes(edge)) siteSpans.push(edge);
-    }
-    if (!siteSpans.length) return null;
+// Words that join names: "lena paul, abella danger", "lena paul and abella
+// danger", "lena paul & abella danger", "lena paul x abella danger".
+const SEPARATOR = /\s*(?:,|&|\+|\/|;|\band\b|\bwith\b|\bvs\.?\b|\bx\b|\bft\.?\b|\bfeat\.?\b)\s*/i;
+const MAX_PERFORMERS = 3;
+const MAX_WORDS = 10;
 
-    const tryPerformer = async (s) => {
-        const list = await lookup('performers', s.text).catch(() => []);
-        const hit = list.find((x) => closeName(s.text, x.name));
-        return hit ? { kind: 'performer', name: hit.name, span: s.text, rest: s.rest } : null;
+function makeLookups(lookup) {
+    const performer = async (text) => {
+        const list = await lookup('performers', text).catch(() => []);
+        const hit = list.find((x) => closeName(text, x.name));
+        return hit ? { name: hit.name, span: text } : null;
     };
     // Studios: typos are forgiven only against the known big studios. Other
     // sites must match ThePornDB's name exactly, and need two words or more:
     // measured, "laying it bare" fuzzily became the site "Playing" and
     // "angela" the site "ANGELA".
-    const trySite = async (s) => {
-        const local = knownStudio(s.text);
-        if (!local && !s.text.includes(' ')) return null;
-        const want = local || s.text;
+    const studio = async (text) => {
+        const local = knownStudio(text);
+        if (!local && !text.includes(' ')) return null;
+        const want = local || text;
         const list = await lookup('sites', want).catch(() => []);
         const exact = (x) => norm(x.name) === norm(want) || norm(x.shortName) === norm(want).replace(/ /g, '');
         const hit = list.find(exact);
-        if (hit) return { kind: 'studio', name: hit.name, shortName: hit.shortName || '', span: s.text, rest: s.rest };
-        return local ? { kind: 'studio', name: local, shortName: '', span: s.text, rest: s.rest } : null;
+        if (hit) return { name: hit.name, shortName: hit.shortName || '', span: text };
+        return local ? { name: local, shortName: '', span: text } : null;
     };
+    return { performer, studio };
+}
 
-    // Round 1: the whole query.
-    const whole = siteSpans[0];
+/**
+ * Performers in one run of words, left to right, longest name first at each
+ * position ("lena paul abella danger" → Lena Paul, Abella Danger). Names are
+ * 2–3 words; one-word names are too ambiguous ("angela"). All windows are
+ * looked up at once. → { found: [{ name, span }], leftover: [words] }
+ */
+async function performersIn(words, performer) {
+    const windows = new Map();
+    for (let i = 0; i < words.length; i++) {
+        for (const len of [3, 2]) {
+            if (i + len <= words.length) windows.set(words.slice(i, i + len).join(' '), null);
+        }
+    }
+    await Promise.all([...windows.keys()].map(async (t) => { windows.set(t, await performer(t)); }));
+    const found = [];
+    const leftover = [];
+    for (let i = 0; i < words.length;) {
+        const hit = [3, 2].map((len) => (i + len <= words.length ? windows.get(words.slice(i, i + len).join(' ')) : null)).find(Boolean);
+        if (hit && found.length < MAX_PERFORMERS && !found.some((f) => f.name === hit.name)) {
+            found.push(hit);
+            i += hit.span.split(' ').length;
+        } else {
+            leftover.push(words[i]);
+            i++;
+        }
+    }
+    return { found, leftover };
+}
+
+/**
+ * Understand a query: → { performers: [{ name, span }], studio: { name,
+ * shortName, span } | null, rest: [words] } or null when it names nobody.
+ * `lookup(kind, text)` is ThePornDB's performer/site search ([{ name,
+ * shortName }]). The whole query is tried first, so typing one name costs
+ * one round of lookups.
+ */
+async function resolve(query, lookup) {
+    const { performer, studio } = makeLookups(lookup);
+    const all = norm(query).split(' ').filter(Boolean).slice(0, MAX_WORDS);
+    if (!all.length) return null;
+    const whole = all.join(' ');
+
+    // Round 1: the whole query is one name.
     const [p0, s0] = await Promise.all([
-        whole.text.includes(' ') ? tryPerformer(whole) : Promise.resolve(null),
-        trySite(whole),
+        all.length >= 2 && all.length <= 4 ? performer(whole) : Promise.resolve(null),
+        studio(whole),
     ]);
-    if (p0 || s0) return p0 || s0;
+    if (p0) return { performers: [p0], studio: null, rest: [] };
+    if (s0) return { performers: [], studio: s0, rest: [] };
 
-    // Round 2: parts of it. Longest span wins; a performer wins a tie.
-    const subP = performerSpans.slice(1);
-    const subS = siteSpans.slice(1);
-    const found = (await Promise.all([...subP.map(tryPerformer), ...subS.map(trySite)])).filter(Boolean);
-    found.sort((a, b) => b.span.split(' ').length - a.span.split(' ').length || (a.kind === 'performer' ? -1 : 1));
-    return found[0] || null;
+    // Round 2: names inside it, per segment between separators.
+    const segments = String(query || '').split(SEPARATOR).map((s) => norm(s).split(' ').filter(Boolean)).filter((s) => s.length);
+    const performers = [];
+    let leftover = [];
+    for (const seg of segments) {
+        const r = await performersIn(seg, performer);
+        for (const f of r.found) if (performers.length < MAX_PERFORMERS && !performers.some((p) => p.name === f.name)) performers.push(f);
+        leftover = leftover.concat(r.leftover);
+    }
+    // A studio among the leftovers: the longest run that is one ("blacked
+    // raw lena paul"), else a big studio's one-word name at either end.
+    let st = null;
+    const runs = spans(leftover.join(' '), { minWords: 1, max: 20 });
+    const tries = runs.filter((s) => s.text.includes(' ')).slice(0, 4)
+        .concat(runs.filter((s) => !s.text.includes(' ') && (s.text === leftover[0] || s.text === leftover[leftover.length - 1])));
+    for (const s of tries) {
+        st = await studio(s.text);
+        if (st) {
+            leftover = s.rest.length ? leftover.filter((w) => !s.text.split(' ').includes(w)) : [];
+            break;
+        }
+    }
+    if (!performers.length && !st) return null;
+    return { performers, studio: st, rest: leftover };
 }
 
 /** Does a title match every leftover keyword (prefix or substring)? */
@@ -119,14 +170,20 @@ function matchesKeywords(title, rest) {
     return rest.every((w) => hay.includes(w));
 }
 
-/** The query as it should read once the entity's name is spelled right. */
-function correctedQuery(query, entity) {
-    if (!entity || norm(entity.name) === entity.span) return null;
-    const w = norm(query).split(' ').filter(Boolean);
-    const spanWords = entity.span.split(' ');
-    const at = w.findIndex((_, i) => w.slice(i, i + spanWords.length).join(' ') === entity.span);
-    if (at === -1) return entity.name;
-    return [...w.slice(0, at), entity.name, ...w.slice(at + spanWords.length)].join(' ');
+/** Does a title feature every one of these performers? */
+function featuresAll(title, names) {
+    const cast = (title.performers || []).map(norm);
+    return names.every((n) => cast.some((c) => closeName(c, n) || c.includes(norm(n))));
 }
 
-module.exports = { resolve, spans, closeName, matchesKeywords, correctedQuery, knownStudio, KNOWN_STUDIOS };
+/** The query as it should read once names are spelled right, or null. */
+function correctedQuery(query, resolved) {
+    if (!resolved) return null;
+    const named = [...(resolved.performers || []), ...(resolved.studio ? [resolved.studio] : [])];
+    if (!named.some((e) => norm(e.name) !== e.span)) return null;
+    let text = norm(query);
+    for (const e of named) text = text.replace(e.span, e.name);
+    return text.replace(/\s+/g, ' ').trim();
+}
+
+module.exports = { resolve, spans, closeName, matchesKeywords, featuresAll, correctedQuery, knownStudio, KNOWN_STUDIOS };

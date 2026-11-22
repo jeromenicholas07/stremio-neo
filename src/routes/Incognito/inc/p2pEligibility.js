@@ -1,17 +1,21 @@
 // Which Incognito P2P streams auto-pick may try. Auto-pick ranks quality
-// before seeders, so this decides what it can reach:
+// before seeders (1080p › 720p › 480p › untagged, then most seeders), so
+// letting a stream in means "play the best quality that has enough
+// seeders":
 //
-//   - every stream needs at least MIN_SEEDERS live seeders (a weaker swarm
-//     rarely starts);
-//   - 1080p qualifies on that alone. You prefer 1080p, and a 1080p copy with
-//     15 seeders shouldn't lose to a 480p one with 180. If it stalls, the
-//     Player's 60 s watchdog moves on to the next stream;
+//   - 1080p, 720p, 480p and untagged releases qualify with at least
+//     MIN_SEEDERS live seeders, whatever the best release has. You prefer
+//     quality; a 1080p copy with 15 seeders shouldn't lose to a 480p one with
+//     180. If the better copy stalls, the Player's 60 s watchdog moves on to
+//     the next one down;
+//   - untagged releases rank last on their own (auto-pick's "Other / SD");
+//     the addon labels the ones whose size can only be 1080p "~1080p";
 //   - 4K only when no 1080p qualifies, and with at least MIN_4K_SEEDERS: the
 //     files are 2–4× larger and P2P here often runs at a few hundred KB/s
 //     (measured: "Green Eyed Monster" picked a 6-seeder 4K over two 1080p
-//     copies with 21–22);
-//   - 720p and below keep the relative bar (a tenth of the best release's
-//     live count), so a 7-seeder 720p doesn't beat a 180-seeder 480p.
+//     copies with 20+);
+//   - under MIN_SEEDERS a swarm rarely starts, and an unverified listed count
+//     ("👤 ~428 listed") never counts.
 //
 // The rest stay in the list for picking by hand.
 
@@ -25,26 +29,21 @@ function liveSeeders(s) {
     return m ? parseInt(m[1], 10) : 0;
 }
 
-// The quality line of an Incognito stream name ("Incognito P2P\n1080p").
+// The quality line of an Incognito stream name ("Incognito P2P\n1080p";
+// "~1080p" when estimated from the file size).
 function qualityOf(s) {
-    return String(((s && s.name) || '').split('\n')[1] || '').trim().toLowerCase();
+    return String(((s && s.name) || '').split('\n')[1] || '').trim().toLowerCase().replace(/^~/, '');
 }
 
 /** streams → predicate: may auto-pick try this P2P stream? */
 function p2pEligibility(streams) {
     const p2p = (streams || []).filter((s) => s && s.infoHash);
-    const best = Math.max(0, ...p2p.map(liveSeeders));
-    const relative = Math.max(MIN_SEEDERS, Math.ceil(best / 10));
-    const ok1080 = (s) => qualityOf(s) === '1080p' && liveSeeders(s) >= MIN_SEEDERS;
-    const any1080 = p2p.some(ok1080);
+    const any1080 = p2p.some((s) => qualityOf(s) === '1080p' && liveSeeders(s) >= MIN_SEEDERS);
     return (s) => {
         if (!s || !s.infoHash) return false;
         const live = liveSeeders(s);
-        if (live < MIN_SEEDERS) return false;
-        const q = qualityOf(s);
-        if (q === '1080p') return true;
-        if (q === '4k') return !any1080 && live >= Math.max(MIN_4K_SEEDERS, relative);
-        return live >= relative;
+        if (qualityOf(s) === '4k') return !any1080 && live >= MIN_4K_SEEDERS;
+        return live >= MIN_SEEDERS;
     };
 }
 

@@ -9,6 +9,7 @@ const relay = require('./relay');
 const catalog = require('./catalog');
 const favorites = require('./favorites');
 const taste = require('./taste');
+const searchHistory = require('./searchHistory');
 const store = require('./store');
 const streamsOut = require('./streams');
 const { resolveWithRD } = require('../rd');
@@ -104,7 +105,7 @@ function favoriteSnapshot(id) {
 const ENDPOINTS = [
     '/inc/rows', '/inc/row/<id>', '/inc/title/<id>', '/inc/streams/<id>', '/inc/search',
     '/inc/play/<token>', '/inc/rd/<token>', '/inc/img', '/inc/tags', '/inc/favorites', '/inc/config',
-    '/inc/played',
+    '/inc/played', '/inc/search-click',
 ];
 
 // Rows built from your favorites and plays answer only the app's own pages.
@@ -116,7 +117,9 @@ function handle(req, res) {
     const p = u.pathname;
     if (!p.startsWith('/inc/')) return false;
 
-    const personal = p === '/inc/favorites' || p === '/inc/config' || p === '/inc/rows' || p === '/inc/played';
+    // Search writes your local search history, so it is personal too.
+    const personal = p === '/inc/favorites' || p === '/inc/config' || p === '/inc/rows' || p === '/inc/played'
+        || p === '/inc/search' || p === '/inc/search-click';
     if (req.method === 'OPTIONS') { preflight(req, res, personal); return true; }
     if (personal && !originAllowed(req)) { res.statusCode = 403; res.end(); return true; }
 
@@ -168,8 +171,19 @@ function handle(req, res) {
             return;
         }
         if (p === '/inc/search') {
-            const q = (u.searchParams.get('q') || '').trim();
-            sendJson(req, res, 200, q ? await catalog.search(q) : { titles: [], pending: 0 });
+            const q = (u.searchParams.get('q') || '').trim().slice(0, 200);
+            const result = q ? await catalog.search(q) : { titles: [], pending: 0 };
+            if (q) searchHistory.recordSearch(q, result);
+            sendJson(req, res, 200, result, { personal: true });
+            return;
+        }
+        if (p === '/inc/search-click') {
+            // The search page reports which result was opened (history only).
+            if (req.method !== 'POST') { sendJson(req, res, 405, { ok: false }, { personal: true }); return; }
+            const body = await readBody(req, 4096);
+            const ok = Boolean(body && typeof body.q === 'string' && body.title
+                && searchHistory.recordClick(body.q, body.title, body.rank));
+            sendJson(req, res, 200, { ok }, { personal: true });
             return;
         }
         if (p === '/inc/tags') {

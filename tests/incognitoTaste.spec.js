@@ -107,6 +107,45 @@ describe('clearnet search sections', () => {
         expect(out.tube.map((x) => x.id)).toEqual(['tube1']);
         expect(out.playable).toBe(2);
     });
+
+    it('keeps the "all named performers" scenes as their own leading group', () => {
+        const t = (id, releaseCount, seeders) => ({ id, kind: 'scene', releaseCount, seeders });
+        const out = sections([t('both-weak', 1, 2), t('both-ok', 1, 9), t('solo-ok', 1, 50), t('solo-none', 0, 0)], 2);
+        expect(out.together.map((x) => x.id)).toEqual(['both-ok', 'both-weak']);
+        expect(out.pro.map((x) => x.id)).toEqual(['solo-ok', 'solo-none']);
+        expect(out.scenes).toBe(4);
+    });
+});
+
+describe('search history (local only)', () => {
+    const history = require('../stremio-adult-addon/src/inc/searchHistory');
+    const result = (n) => ({
+        titles: Array.from({ length: n }, (_, i) => ({ id: `inc:scene:${i}`, kind: 'scene', name: `S${i}`, releaseCount: i % 2, seeders: 9 })),
+        entities: [{ kind: 'performer', name: 'Lena Paul' }], correctedTo: 'Lena Paul', pending: 3,
+    });
+    beforeEach(() => { fs.rmSync(file('search-history.json'), { force: true }); history._reset(); });
+
+    it('records each search with what came back, merging quick repeats', () => {
+        history.recordSearch('Lena  Pual', result(4), 1000);
+        history.recordSearch('lena pual', result(6), 5000); // the page re-asking
+        history.recordSearch('tushy', result(2), 9000);
+        const saved = JSON.parse(fs.readFileSync(file('search-history.json'), 'utf8')).searches;
+        expect(saved.map((s) => s.q)).toEqual(['tushy', 'lena pual']);
+        expect(saved[1]).toMatchObject({ results: 6, scenes: 6, playable: 3, asked: 2, correctedTo: 'Lena Paul', entities: [{ kind: 'performer', name: 'Lena Paul' }] });
+    });
+
+    it('records which result was opened and where', () => {
+        history.recordSearch('lena paul', result(3), 1000);
+        expect(history.recordClick('Lena Paul', { id: 'inc:scene:2', name: 'S2' }, 2, 2000)).toBe(true);
+        expect(history.recent(1)[0].clicks[0]).toEqual({ id: 'inc:scene:2', name: 'S2', rank: 2, at: 2000 });
+        expect(history.recordClick('never searched', { id: 'x' }, 0)).toBe(false);
+    });
+
+    it('starts a new entry for the same query after half an hour', () => {
+        history.recordSearch('vixen', result(1), 0);
+        history.recordSearch('vixen', result(1), 31 * 60 * 1000);
+        expect(history.recent(5).filter((s) => s.q === 'vixen')).toHaveLength(2);
+    });
 });
 
 describe('local signals', () => {

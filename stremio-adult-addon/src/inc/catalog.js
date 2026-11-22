@@ -188,9 +188,9 @@ const playable = (t) => t && t.releaseCount > 0 && t.seeders >= PLAYABLE_SEEDERS
 // pending; the search keeps going (handleCatalog caches it for 3 h), so the
 // UI's follow-up fetch gets the playable-first order.
 const PICK_BUDGET_MS = 6000;
-const withinBudget = (promise, fallback) => {
+const withinBudget = (promise, fallback, ms = PICK_BUDGET_MS) => {
     promise.catch(() => { /* the fallback already answered */ });
-    return Promise.race([promise, new Promise((r) => setTimeout(() => r(null), PICK_BUDGET_MS))])
+    return Promise.race([promise, new Promise((r) => setTimeout(() => r(null), ms))])
         .then((v) => v || fallback());
 };
 
@@ -522,56 +522,107 @@ async function rdCacheVerdicts(releases) {
     return verdicts;
 }
 
-// A performer's or studio's catalogue for search: their ThePornDB listing
-// (two pages when keywords will narrow it) plus the scenes one torrent search
-// for them finds, narrowed to the leftover keywords.
-async function entityScenes(entity) {
-    const pages = entity.rest.length ? [1, 2] : [1];
-    const listingFor = (page) => (entity.kind === 'performer'
-        ? tpdb.performerScenes(entity.name, page)
-        : tpdb.siteScenes(entity.name, page));
-    const torrentQuery = entity.kind === 'studio' && entity.shortName ? entity.shortName : entity.name;
+// One performer's or studio's catalogue: their ThePornDB listing (more pages
+// when it will be narrowed down) plus the scenes one torrent search finds.
+// A cold torrent search can take a minute (measured: "riley reid mia malkova"
+// took 102 s, past the page's 90 s limit), so it gets SEARCH_BUDGET_MS; past
+// that the listing answers alone and reports pending, and the search finishes
+// in the background (cached) for the page's follow-up fetch.
+const SEARCH_BUDGET_MS = 12000;
+async function catalogueOf(kind, name, torrentQuery, pages) {
+    const listingFor = (page) => (kind === 'performer' ? tpdb.performerScenes(name, page) : tpdb.siteScenes(name, page));
+    const firstListing = listingFor(1);
     const [first, ...more] = await Promise.all([
-        indexRowWithTorrents(listingFor(1), torrentQuery, 1),
-        ...pages.slice(1).map((p) => safe(listingFor(p))),
+        withinBudget(indexRowWithTorrents(firstListing, torrentQuery, 1),
+            async () => ({ ...tpdbRow(await safe(firstListing)), pending: 1 }), SEARCH_BUDGET_MS),
+        ...Array.from({ length: pages - 1 }, (_, i) => safe(listingFor(i + 2))),
     ]);
-    const titles = [...first.titles, ...more.flatMap((r) => (r && r.titles) || [])]
-        .filter((t) => entities.matchesKeywords(t, entity.rest));
-    return { titles, pending: first.pending || 0 };
+    return { titles: [...first.titles, ...more.flatMap((r) => (r && r.titles) || [])], pending: first.pending || 0 };
+}
+
+/**
+ * Scenes for what the query named (searchEntities.resolve):
+ *   - several performers: scenes with all of them first (from each one's
+ *     filmography, plus a torrent search for the names together), then each
+ *     one's own scenes, interleaved;
+ *   - one performer or a studio: their catalogue;
+ *   - narrowed to the studio and leftover keywords when given.
+ */
+async function entityScenes(resolved) {
+    const names = resolved.performers.map((p) => p.name);
+    const st = resolved.studio;
+    const narrowed = names.length > 1 || resolved.rest.length > 0 || (names.length && st);
+    const pages = narrowed ? 3 : 1;
+    const inStudio = (t) => !st || norm(t.studio).includes(norm(st.name)) || norm(t.network).includes(norm(st.name))
+        || (st.shortName && norm(t.studioShort) === norm(st.shortName));
+    const keep = (t) => inStudio(t) && entities.matchesKeywords(t, resolved.rest);
+
+    if (!names.length) {
+        const r = await catalogueOf('studio', st.name, st.shortName || st.name, pages);
+        return { titles: r.titles.filter(keep), pending: r.pending };
+    }
+    const lists = await Promise.all(names.map((n, i) => catalogueOf(
+        'performer', n,
+        // The lead's torrent search names everyone, so scenes together surface.
+        i === 0 && names.length > 1 ? names.join(' ') : n,
+        pages,
+    )));
+    const pending = lists.reduce((n, r) => n + r.pending, 0);
+    if (names.length === 1) return { titles: lists[0].titles.filter(keep), pending };
+    const together = dedupeScenes(lists.flatMap((r) => r.titles).filter((t) => entities.featuresAll(t, names) && keep(t)));
+    const ids = new Set(together.map((t) => t.id));
+    const each = interleave(lists.map((r) => r.titles.filter((t) => !ids.has(t.id) && keep(t))));
+    return { titles: [...together, ...each], pending, together: together.length };
+}
+
+function interleave(lists) {
+    const out = [];
+    const max = Math.max(0, ...lists.map((l) => l.length));
+    for (let i = 0; i < max; i++) for (const l of lists) if (l[i]) out.push(l[i]);
+    return out;
 }
 
 /**
  * Search everything: ThePornDB scenes, torrent releases matched to scenes,
- * tube videos. When part of the query names a performer or studio (typos
- * included), their catalogue leads, filtered by the other words.
- * → { titles, pending, correctedTo, entity }
+ * tube videos. When the query names performers (one or several) or a studio,
+ * typos included, their scenes lead, narrowed by the other words.
+ * → { titles, pending, correctedTo, entity, entities, together }
  */
 async function search(query) {
     // Release-style queries ("Vixen.23.03.17") search like spaced words.
     const q = String(query || '').replace(/[._]+/g, ' ').replace(/\s+/g, ' ').trim();
     const entityP = tpdb.hasToken() ? entities.resolve(q, tpdb.lookup).catch(() => null) : Promise.resolve(null);
-    const [index, a, b, torrents, entity] = await Promise.all([
+    // The query's own torrent search gets the same budget (see catalogueOf).
+    let torrentsLate = 0;
+    const [index, a, b, torrents, resolved] = await Promise.all([
         safe(tpdb.searchScenes(q)),
         safe(eporner.search(q)),
         safe(redtube.search(q)),
-        safe(handleCatalog('adult-search', { search: q })),
+        withinBudget(safe(handleCatalog('adult-search', { search: q })), async () => { torrentsLate = 1; return null; }, SEARCH_BUDGET_MS),
         entityP,
     ]);
     const [sc, ent] = await Promise.all([
         sceneRow((torrents && torrents.metas) || []),
-        entity ? entityScenes(entity).catch(() => ({ titles: [], pending: 0 })) : Promise.resolve({ titles: [], pending: 0 }),
+        resolved ? entityScenes(resolved).catch(() => ({ titles: [], pending: 0 })) : Promise.resolve({ titles: [], pending: 0 }),
     ]);
     const pro = dedupeScenes(withAvailability([
         ...ent.titles,
         ...sc.titles.filter((t) => t.tpdbId),
         ...((index && index.titles) || []),
     ]));
+    const named = resolved
+        ? [...resolved.performers.map((p) => ({ kind: 'performer', name: p.name })), ...(resolved.studio ? [{ kind: 'studio', name: resolved.studio.name }] : [])]
+        : [];
     return {
         titles: remember([...pro, ...mergeTube([b, a])]),
         // Releases still being matched to scenes; the UI asks again.
-        pending: (sc.pending || 0) + (ent.pending || 0),
-        correctedTo: entities.correctedQuery(q, entity),
-        entity: entity ? { kind: entity.kind, name: entity.name } : null,
+        pending: (sc.pending || 0) + (ent.pending || 0) + torrentsLate,
+        correctedTo: entities.correctedQuery(q, resolved),
+        entities: named,
+        // Older web UIs read one entity.
+        entity: named[0] || null,
+        // With several performers: how many leading results feature them all.
+        together: ent.together === undefined ? null : ent.together,
     };
 }
 
