@@ -10746,6 +10746,50 @@ html:not(.active-slider-within-NcgYf) .player-container-wIELK.overlayHidden-gyjI
   color: rgba(255, 255, 255, 0.6);
 }
 
+.root-v0oBO {
+  color: #fff;
+  margin-bottom: 2.5rem;
+}
+.header-l_M8P {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.4rem 1rem;
+  margin-bottom: 1rem;
+}
+.title-M00AD {
+  font-size: 1.5rem;
+  font-weight: 700;
+}
+.meta-Ue0bc {
+  font-size: 0.85rem;
+  color: rgba(255, 255, 255, 0.6);
+}
+.section-pdkTV {
+  margin-bottom: 1.8rem;
+}
+.section-title-OXS3X {
+  margin-bottom: 0.7rem;
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.85);
+}
+.grid-BFIJc {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(16rem, 1fr));
+  gap: 0.9rem;
+}
+@media only screen and (max-width: 640px) {
+  .grid-BFIJc {
+    grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr));
+  }
+}
+.message-fk9_1 {
+  padding: 2rem 0;
+  text-align: center;
+  color: rgba(255, 255, 255, 0.6);
+}
+
 .resolving-root-ksOc6 {
   position: relative;
   width: 100%;
