@@ -452,6 +452,41 @@ the dev addon on 7000. Playback went through mpv.
     - The performer's torrent search includes the studio.
   - **Clearnet copies:** neither Eporner nor RedTube has this 50-minute
     scene in full, only 5–20 minute edits and compilations.
+- **More sources (2026-11-22):**
+  - **ISP blocks are not DNS.** For 20 adult and indexer domains, the
+    system resolver, 1.1.1.1 and Cloudflare DNS-over-HTTPS returned the
+    same addresses. The block is a TCP reset during the TLS handshake,
+    intermittent (the same IP connects one time and is reset the next),
+    which is filtering on the site name in the handshake. Retries get
+    through; a VPN or proxy is the real fix.
+  - **Prowlarr indexers:** the user's Prowlarr had MyPornClub and
+    TorrentGalaxyClone.
+    - Added for testing: XXXClub, PornXLab, TorrentDownload, OpenSharing,
+      xxxtor, RinTor.NeT.
+    - Refused: 1337x, Uindex and Sexy-Pics (Cloudflare, even with
+      FlareSolverr), kickasstorrents (ISP reset), Torrent[CORE]
+      (FlareSolverr error).
+    - Per indexer, on 6 scenes with no healthy torrent: 0 matched releases
+      anywhere. XXXClub has current studio releases with real seeders,
+      already on the public sources. The others return few, mostly
+      hashless site-rips with 0–1 seeders. They also took over the home
+      "Torrents" rows (some titles in Russian).
+    - **Kept: XXXClub.** Removed the other five. No background Prowlarr
+      fill, since it showed no playable gain.
+    - TorrentGalaxyClone is broken on its side: its search redirects to
+      torrentgalaxy.info/get-posts/, so Prowlarr keeps disabling it.
+    - PornoLab (the largest archive) needs the user's own account.
+  - **Tube sites:** probed HQporner, Porntrex, SpankBang, Txxx,
+    NoodleMagazine, DaftSex and PornHat.
+    - SpankBang and NoodleMagazine are behind Cloudflare challenges.
+    - Txxx renders its results in JavaScript.
+    - **Porntrex added** (full-length studio uploads up to 1080p/4K; file
+      links tied to the IP that loaded the page).
+    - Clearnet copies on 26 scenes: 3 strong, all Eporner, and none for
+      scenes without a healthy torrent. Uploads are rarely titled like
+      the studio release.
+    - So Porntrex's value is as a search source: "Full-length uploads",
+      which now auto-play. HQporner not added.
 - **Lint:** the new UI files add `react/prop-types` errors, like the existing
   Incognito components. All other rules pass.
 
