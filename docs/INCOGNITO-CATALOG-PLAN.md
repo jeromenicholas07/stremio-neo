@@ -404,6 +404,27 @@ the dev addon on 7000. Playback went through mpv.
     - Typos are forgiven only for a list of big studios. Other sites need
       an exact name of two words or more ("laying it bare" had become the
       site "Playing").
+- **Why results have no streams (measured 2026-11-22):**
+  - **Torrent sources:** releases come from the public sources (The Pirate
+    Bay's API, Knaben, Torrents-CSV), which answer in about 2 s. Prowlarr
+    gets what is left of a 6 s budget.
+    - Given 75 s on 6 recent Brazzers Exxtra and Tushy scenes, Prowlarr
+      found 15 more matched releases, but only 2 with 5 or more live
+      seeders.
+    - All 6 scenes were already playable from the public sources.
+    - Prowlarr took 8 s per query (median), up to about 20 s.
+    - Not worth slowing the title page for, so no change.
+  - **Real-Debrid:** 60 checks across 12 Riley Reid scenes found 4 cached
+    releases.
+    - They rescued 2 scenes with no healthy P2P swarm.
+    - Both were already among the 6 most-seeded releases the title page
+      checks.
+    - Checking by quality found nothing extra.
+    - No change, which spares your account extra add/delete calls.
+  - **The real gap is clip stores.** About a third of a performer's newest
+    scenes are clip-store uploads (Manyvids, Faphouse, FansDB, OnlyFans-style
+    episodes), and none had a torrent. They now rank after studio scenes in
+    search and in performer and studio rows, unless they have releases.
 - **Lint:** the new UI files add `react/prop-types` errors, like the existing
   Incognito components. All other rules pass.
 

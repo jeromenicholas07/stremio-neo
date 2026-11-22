@@ -325,7 +325,14 @@ async function row(rowId, page = 1) {
         // Stable: playable scenes first, each group keeps its own order.
         // Playable = a release with enough live seeders to start (same bar
         // as auto-pick on the title page).
-        titles = [...titles.filter(playable), ...titles.filter((t) => !playable(t))];
+        // Then the rest, with clip-store uploads (which almost never have
+        // torrents) after studio work.
+        const rest = titles.filter((t) => !playable(t));
+        titles = [
+            ...titles.filter(playable),
+            ...rest.filter((t) => t.releaseCount > 0 || !tpdb.isClipTitle(t)),
+            ...rest.filter((t) => !(t.releaseCount > 0) && tpdb.isClipTitle(t)),
+        ];
     }
     if (rowId === 'claude' || rowId === 'foryou') {
         // A title played since the row was cached drops out now.
@@ -609,7 +616,7 @@ async function search(query) {
         ...ent.titles,
         ...sc.titles.filter((t) => t.tpdbId),
         ...((index && index.titles) || []),
-    ]));
+    ])).map((t) => (!t.clip && tpdb.isClipTitle(t) ? { ...t, clip: true } : t));
     const named = resolved
         ? [...resolved.performers.map((p) => ({ kind: 'performer', name: p.name })), ...(resolved.studio ? [{ kind: 'studio', name: resolved.studio.name }] : [])]
         : [];

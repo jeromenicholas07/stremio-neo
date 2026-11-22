@@ -9,8 +9,10 @@
 
 const healthy = (t) => t.releaseCount > 0 && t.seeders >= 5;
 
+// Clip-store uploads without releases go last: they almost never have
+// torrents (the addon marks them `clip`).
 function ordered(list) {
-    const rank = (t) => (healthy(t) ? 0 : t.releaseCount > 0 ? 1 : 2);
+    const rank = (t) => (healthy(t) ? 0 : t.releaseCount > 0 ? 1 : t.clip ? 3 : 2);
     return list.map((t, i) => [t, i]).sort((a, b) => rank(a[0]) - rank(b[0]) || a[1] - b[1]).map(([t]) => t);
 }
 

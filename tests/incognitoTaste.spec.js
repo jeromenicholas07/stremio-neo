@@ -108,6 +108,14 @@ describe('clearnet search sections', () => {
         expect(out.playable).toBe(2);
     });
 
+    it('puts clip-store uploads without releases after studio scenes', () => {
+        const out = sections([
+            { id: 'clip', kind: 'scene', clip: true }, { id: 'studio', kind: 'scene' },
+            { id: 'clip-with-torrents', kind: 'scene', clip: true, releaseCount: 1, seeders: 2 },
+        ]);
+        expect(out.pro.map((x) => x.id)).toEqual(['clip-with-torrents', 'studio', 'clip']);
+    });
+
     it('keeps the "all named performers" scenes as their own leading group', () => {
         const t = (id, releaseCount, seeders) => ({ id, kind: 'scene', releaseCount, seeders });
         const out = sections([t('both-weak', 1, 2), t('both-ok', 1, 9), t('solo-ok', 1, 50), t('solo-none', 0, 0)], 2);

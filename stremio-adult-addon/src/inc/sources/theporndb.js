@@ -126,6 +126,7 @@ function sceneToTitle(s, kind = 'scene') {
         performerImages: faces,
         tags: (s.tags || []).map((t) => cleanName(t && t.name)).filter(Boolean).slice(0, 15),
         description: cleanName(s.description),
+        clip: isClipSite(s),
     };
 }
 
@@ -190,13 +191,21 @@ const LIST_TTL_MS = 30 * 60 * 1000;
 const ID_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
 // Clip stores and fan sites: kept in a performer's filmography, left out of
-// "newest scenes", which is meant to be studio work.
-const CLIP_NETWORKS = /clips|manyvids|onlyfans|fansly|iwantclips|clips4sale|loyalfans|modelhub|pornhub|xvideos|justfor\.?fans|fancentro|avn stars|niteflirt/i;
+// "newest scenes", which is meant to be studio work, and ranked last in
+// search and rows unless they have releases: measured 2026-11-22, a third of
+// a performer's newest scenes were clip-store uploads (Manyvids, Faphouse,
+// FansDB) and none had a torrent.
+const CLIP_NETWORKS = /clips|manyvids|onlyfans|fansly|fansdb|faphouse|iwantclips|clips4sale|loyalfans|modelhub|pornhub|xvideos|justfor\.?fans|fancentro|avn stars|niteflirt/i;
 
 function isClipSite(scene) {
     const site = scene && scene.site;
     const names = [site && site.name, site && site.network && site.network.name, site && site.parent && site.parent.name].filter(Boolean).join(' ');
     return CLIP_NETWORKS.test(names);
+}
+
+/** Same test for a title (card data, possibly cached before `clip` existed). */
+function isClipTitle(t) {
+    return Boolean(t && (t.clip || CLIP_NETWORKS.test(`${t.studio || ''} ${t.network || ''}`)));
 }
 
 async function cachedList(path, kind, { filter } = {}) {
@@ -289,5 +298,5 @@ async function getMovie(uuid) {
 
 module.exports = {
     hasToken, parseRelease, getScene, getMovie, sceneToTitle, plausible, releaseDate,
-    latestScenes, performerScenes, siteScenes, movies, searchScenes, isClipSite, lookup,
+    latestScenes, performerScenes, siteScenes, movies, searchScenes, isClipSite, isClipTitle, lookup,
 };
