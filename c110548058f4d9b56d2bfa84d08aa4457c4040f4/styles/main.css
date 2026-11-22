@@ -10765,6 +10765,26 @@ html:not(.active-slider-within-NcgYf) .player-container-wIELK.overlayHidden-gyjI
   font-size: 0.85rem;
   color: rgba(255, 255, 255, 0.6);
 }
+.entity-FYJkG {
+  margin: -0.4rem 0 1rem;
+  font-size: 0.9rem;
+  color: rgba(255, 255, 255, 0.75);
+}
+.entity-FYJkG a {
+  color: #fff;
+  font-weight: 600;
+  text-decoration: none;
+}
+.entity-FYJkG a:hover {
+  text-decoration: underline;
+}
+.entity-FYJkG a + a {
+  margin-left: 0.9rem;
+}
+.note-lWpWx {
+  font-size: 0.85rem;
+  color: rgba(255, 255, 255, 0.6);
+}
 .section-pdkTV {
   margin-bottom: 1.8rem;
 }
