@@ -10778,6 +10778,13 @@ html:not(.active-slider-within-NcgYf) .player-container-wIELK.overlayHidden-gyjI
 .entity-FYJkG a:hover {
   text-decoration: underline;
 }
+.entity-FYJkG a + a {
+  margin-left: 0.9rem;
+}
+.note-lWpWx {
+  font-size: 0.85rem;
+  color: rgba(255, 255, 255, 0.6);
+}
 .section-pdkTV {
   margin-bottom: 1.8rem;
 }
