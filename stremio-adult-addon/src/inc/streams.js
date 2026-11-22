@@ -181,13 +181,16 @@ function fromReleases(releases, { title, rdCached, rdEnabled = false } = {}) {
 }
 
 /** Tube files (from relay.resolveStreams) → clearnet streams. */
-function fromDirect(site, siteName, siteId, files, makePlayToken, { label } = {}) {
+// `autoPick`: whether auto-pick may play these (a video's own files, or a
+// strong clearnet match); the title page turns it into `incognitoDirect`.
+function fromDirect(site, siteName, siteId, files, makePlayToken, { label, autoPick = false } = {}) {
     return files.map((f) => ({
         source: 'clearnet',
         name: `${siteName}\n${f.quality ? `${f.quality}p` : f.label}`,
         description: label ? `${label}\n${siteName} · direct` : `${siteName} · direct`,
         url: `/inc/play/${makePlayToken(site, siteId, f.quality)}`,
         behaviorHints: { bingeGroup: `incognito-direct:${site}` },
+        autoPick: Boolean(autoPick),
     }));
 }
 

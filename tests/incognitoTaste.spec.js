@@ -108,6 +108,12 @@ describe('clearnet search sections', () => {
         expect(out.playable).toBe(2);
     });
 
+    it('splits tube uploads into full-length (20 min+) and clips', () => {
+        const out = sections([{ id: 'f', kind: 'tube', duration: 35 * 60 }, { id: 'c', kind: 'tube', duration: 8 * 60 }, { id: 'u', kind: 'tube' }]);
+        expect(out.tubeFull.map((t) => t.id)).toEqual(['f']);
+        expect(out.tubeClips.map((t) => t.id)).toEqual(['c', 'u']);
+    });
+
     it('puts clip-store uploads without releases after studio scenes', () => {
         const out = sections([
             { id: 'clip', kind: 'scene', clip: true }, { id: 'studio', kind: 'scene' },

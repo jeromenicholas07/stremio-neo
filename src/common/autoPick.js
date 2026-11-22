@@ -48,7 +48,9 @@ const SOURCES = [
     // The key is persisted in user settings and must not be renamed.
     // Incognito titles' P2P streams (marked `incognitoP2P` by the Incognito
     // details page) are that tab's main P2P source, so they share this bucket.
-    { key: 'torrentio', label: 'Main add-on (P2P)', test: (stream) => /torrentio/i.test(stream?.addonName || '') || stream?.incognitoP2P === true },
+    // So do its direct files when the Incognito page marks them auto-pickable
+    // (`incognitoDirect`: a tube video's own files, or a strong clearnet match).
+    { key: 'torrentio', label: 'Main add-on (P2P)', test: (stream) => /torrentio/i.test(stream?.addonName || '') || stream?.incognitoP2P === true || stream?.incognitoDirect === true },
     { key: 'other', label: 'Other / P2P', test: () => true },
 ];
 

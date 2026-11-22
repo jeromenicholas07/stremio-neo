@@ -62,6 +62,8 @@ async function withDeepLinks(streams, titleId) {
                 ...stream,
                 source: s.source,
                 incognitoP2P: Boolean(stream.infoHash) && healthy(s),
+                // A tube video's own files, or a strong clearnet match: auto-pick may play them.
+                incognitoDirect: s.source === 'clearnet' && s.autoPick === true,
                 // ?incognito=<id> lets the Player send a failed auto-pick back here.
                 deepLinks: { player: `#/player/${encodeURIComponent(encoded)}?incognito=${encodeURIComponent(titleId)}` },
             };

@@ -15,6 +15,7 @@ const { LRUCache } = require('lru-cache');
 const { handleCatalog } = require('../catalog');
 const eporner = require('./sources/eporner');
 const redtube = require('./sources/redtube');
+const porntrex = require('./sources/porntrex');
 const tpdb = require('./sources/theporndb');
 const scenes = require('./scenes');
 const relay = require('./relay');
@@ -26,7 +27,7 @@ const taste = require('./taste');
 const entities = require('./searchEntities');
 const { mapLimit } = require('./net');
 
-const TUBE = { ep: eporner, rt: redtube };
+const TUBE = { ep: eporner, rt: redtube, pt: porntrex };
 const rowCache = new LRUCache({ max: 300 });
 const ROW_TTL_MS = 20 * 60 * 1000;
 const PENDING_TTL_MS = 15 * 1000;
@@ -362,7 +363,7 @@ function rowList(fav) {
 }
 
 function parseTubeId(id) {
-    const m = String(id).match(/^inc:tube:(ep|rt):(.+)$/);
+    const m = String(id).match(/^inc:tube:(ep|rt|pt):(.+)$/);
     return m ? { site: m[1], siteId: m[2] } : null;
 }
 
@@ -429,26 +430,58 @@ function releaseQueries(t) {
     return [...new Set(q)].slice(0, 4);
 }
 
-// A clearnet copy of a studio scene: a tube video naming the lead performer
-// and most of the title, about as long as the scene. Unverified matching, so
-// only the two best candidates are offered.
+// A tube upload counts as a full scene from 20 minutes up.
+const FULL_LENGTH_S = 20 * 60;
+
+/**
+ * How sure are we that a tube upload is this studio scene? (exported for tests)
+ *   'strong' — names the lead performer, carries most of the title's own
+ *              words, and runs within 20% of the scene's length;
+ *   'weak'   — names the lead and the studio (generic titles like "Case No.
+ *              7862669" never appear in uploads), runs within a minute of
+ *              the scene's length;
+ *   null     — anything else. Without title words, duration alone is how the
+ *              wrong-scene bug happened, hence the one-minute window.
+ */
+function copyConfidence(t, v) {
+    const lead = (t.performers || [])[0];
+    if (!lead || !v) return null;
+    const n = norm(`${v.name} ${(v.tags || []).join(' ')} ${(v.performers || []).join(' ')}`);
+    if (!n.includes(norm(lead)) && !n.replace(/ /g, '').includes(norm(lead).replace(/ /g, ''))) return null;
+    const perfWords = new Set(norm((t.performers || []).join(' ')).split(' '));
+    const want = norm(t.name).split(' ').filter((w) => w.length > 2 && !perfWords.has(w));
+    const ratio = want.length ? want.filter((w) => n.includes(w)).length / want.length : 0;
+    const dur = t.duration && v.duration ? Math.abs(v.duration - t.duration) : null;
+    if (ratio >= 0.6 && (dur === null || dur / t.duration <= 0.2)) return 'strong';
+    const studio = norm(t.studio).replace(/ /g, '');
+    if (studio && n.replace(/ /g, '').includes(studio) && dur !== null && dur <= 60) return 'weak';
+    return null;
+}
+
+// Clearnet copies of a studio scene, from the tube sites, searched by lead +
+// title; the two best matches are offered, labelled with the upload's own
+// title. Only strong matches may be auto-picked. Measured 2026-11-22 on 26
+// scenes: 3 strong copies (all Eporner), none for scenes without a healthy
+// torrent; uploads are rarely titled like the studio release, so Porntrex's
+// value is as a search source (whole scenes you find by name), not here.
 async function clearnetCopies(t) {
     const lead = (t.performers || [])[0];
     if (!lead || !t.name) return [];
-    const query = `${lead} ${t.name}`;
-    const [a, b] = await Promise.all([safe(eporner.search(query)), safe(redtube.search(query))]);
-    const want = norm(t.name).split(' ').filter((w) => w.length > 2);
-    const candidates = [...b, ...a].filter((v) => {
-        const n = norm(`${v.name} ${(v.tags || []).join(' ')}`);
-        if (!n.includes(norm(lead))) return false;
-        const hit = want.filter((w) => n.includes(w)).length;
-        if (!want.length || hit / want.length < 0.6) return false;
-        if (t.duration && v.duration && Math.abs(v.duration - t.duration) / t.duration > 0.2) return false;
-        return true;
-    }).slice(0, 2);
-    const lists = await Promise.all(candidates.map(async (v) => {
+    const byTitle = `${lead} ${t.name}`;
+    const [a, b, c] = await Promise.all([
+        safe(eporner.search(byTitle)), safe(redtube.search(byTitle)), safe(porntrex.search(byTitle)),
+    ]);
+    const seen = new Set();
+    const rank = { strong: 0, weak: 1 };
+    const candidates = [...c, ...b, ...a]
+        .filter((v) => v && !seen.has(v.id) && seen.add(v.id))
+        .map((v) => ({ v, conf: copyConfidence(t, v) }))
+        .filter((x) => x.conf)
+        .sort((x, y) => rank[x.conf] - rank[y.conf])
+        .slice(0, 2);
+    const lists = await Promise.all(candidates.map(async ({ v, conf }) => {
         const files = await resolveDirect(v.site, v.siteId);
-        return streamsOut.fromDirect(v.site, v.siteName, v.siteId, files, relay.makePlayToken, { label: v.name });
+        return streamsOut.fromDirect(v.site, v.siteName, v.siteId, files, relay.makePlayToken, { label: v.name, autoPick: conf === 'strong' });
     }));
     return lists.flat();
 }
@@ -461,7 +494,8 @@ async function streams(id, fallback) {
         const sites = [{ site: tube.site, siteId: tube.siteId, siteName: TUBE[tube.site].name }, ...((t && t.alsoOn) || [])];
         const lists = await Promise.all(sites.map(async ({ site, siteId }) => {
             const files = await resolveDirect(site, siteId);
-            return streamsOut.fromDirect(site, TUBE[site].name, siteId, files, relay.makePlayToken);
+            // The video's own files: nothing to mis-match, so auto-pick may play them.
+            return streamsOut.fromDirect(site, TUBE[site].name, siteId, files, relay.makePlayToken, { autoPick: true });
         }));
         return lists.flat();
     }
@@ -620,10 +654,11 @@ async function search(query) {
     const entityP = tpdb.hasToken() ? entities.resolve(q, tpdb.lookup).catch(() => null) : Promise.resolve(null);
     // The query's own torrent search gets the same budget (see catalogueOf).
     let torrentsLate = 0;
-    const [index, a, b, torrents, resolved] = await Promise.all([
+    const [index, a, b, ptx, torrents, resolved] = await Promise.all([
         safe(tpdb.searchScenes(q)),
         safe(eporner.search(q)),
         safe(redtube.search(q)),
+        safe(porntrex.search(q)),
         withinBudget(safe(handleCatalog('adult-search', { search: q })), async () => { torrentsLate = 1; return null; }, SEARCH_BUDGET_MS),
         entityP,
     ]);
@@ -639,7 +674,10 @@ async function search(query) {
     const named = resolved
         ? [...resolved.performers.map((p) => ({ kind: 'performer', name: p.name })), ...(resolved.studio ? [{ kind: 'studio', name: resolved.studio.name }] : [])]
         : [];
-    const tube = mergeTube([b, a]).filter((t) => tubeRelevant(t, q, named.map((e) => e.name)));
+    // Full-length uploads (Porntrex mostly carries whole studio scenes) lead
+    // the tube section; then the rest, interleaved across sites.
+    const tubeAll = mergeTube([ptx, b, a]).filter((t) => tubeRelevant(t, q, named.map((e) => e.name)));
+    const tube = [...tubeAll.filter((t) => t.duration >= FULL_LENGTH_S), ...tubeAll.filter((t) => !(t.duration >= FULL_LENGTH_S))];
     return {
         titles: remember([...pro, ...tube]),
         // Releases still being matched to scenes; the UI asks again.
@@ -667,4 +705,4 @@ async function tags() {
     return tagCache;
 }
 
-module.exports = { row, rowList, title, streams, search, tags, mergeTube, releaseQueries };
+module.exports = { row, rowList, title, streams, search, tags, mergeTube, releaseQueries, copyConfidence };

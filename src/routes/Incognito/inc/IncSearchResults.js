@@ -76,13 +76,13 @@ const nameList = (names) => (names.length <= 2 ? names.join(' & ') : `${names.sl
 
 function IncSearchResults({ query }) {
     const { titles, loading, error, pending, correctedTo, entities = [], together: togetherCount } = useIncSearch(query);
-    const { together, pro, tube, playable, scenes } = React.useMemo(() => sections(titles, togetherCount), [titles, togetherCount]);
+    const { together, pro, tubeFull, tubeClips, playable, scenes } = React.useMemo(() => sections(titles, togetherCount), [titles, togetherCount]);
     const performers = entities.filter((e) => e.kind === 'performer').map((e) => e.name);
     const [zoomRef, gridStyle] = useGridZoom();
 
     // Search history (kept by the local addon only): which result was opened,
     // and at what position on the page.
-    const shown = React.useMemo(() => [...together, ...pro, ...tube], [together, pro, tube]);
+    const shown = React.useMemo(() => [...together, ...pro, ...tubeFull, ...tubeClips], [together, pro, tubeFull, tubeClips]);
     const onClickCapture = React.useCallback((event) => {
         const a = event.target && event.target.closest && event.target.closest('a[href*="#/incognito/title/"]');
         if (!a || (event.target.closest && event.target.closest('button'))) return;
@@ -143,11 +143,19 @@ function IncSearchResults({ query }) {
                             </div>
                         </section>
                     ) : null}
-                    {tube.length ? (
+                    {tubeFull.length ? (
                         <section className={styles['section']}>
-                            <div className={styles['section-title']}>Amateur &amp; clips</div>
+                            <div className={styles['section-title']}>Full-length uploads</div>
                             <div className={styles['grid']} style={gridStyle}>
-                                {tube.map((t) => <IncTitleCard key={t.id} {...t} />)}
+                                {tubeFull.map((t) => <IncTitleCard key={t.id} {...t} />)}
+                            </div>
+                        </section>
+                    ) : null}
+                    {tubeClips.length ? (
+                        <section className={styles['section']}>
+                            <div className={styles['section-title']}>Clips</div>
+                            <div className={styles['grid']} style={gridStyle}>
+                                {tubeClips.map((t) => <IncTitleCard key={t.id} {...t} />)}
                             </div>
                         </section>
                     ) : null}

@@ -8,6 +8,7 @@
 // own, ordered the same way, ahead of everything else.
 
 const healthy = (t) => t.releaseCount > 0 && t.seeders >= 5;
+const FULL_LENGTH_S = 20 * 60;
 
 // Clip-store uploads without releases go last: they almost never have
 // torrents (the addon marks them `clip`).
@@ -20,10 +21,15 @@ function searchSections(titles, together = 0) {
     const pro = titles.filter((t) => t.kind === 'scene' || t.kind === 'movie');
     const tube = titles.filter((t) => t.kind === 'tube');
     const n = Math.max(0, Math.min(Number(together) || 0, pro.length));
+    // Tube uploads: whole videos (Porntrex mostly carries full studio scenes)
+    // apart from short clips.
+    const full = (t) => (t.duration || 0) >= FULL_LENGTH_S;
     return {
         together: ordered(pro.slice(0, n)),
         pro: ordered(pro.slice(n)),
         tube,
+        tubeFull: tube.filter(full),
+        tubeClips: tube.filter((t) => !full(t)),
         playable: pro.filter(healthy).length,
         scenes: pro.length,
     };

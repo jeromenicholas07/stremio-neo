@@ -22,6 +22,9 @@ const { base64UrlEncode, base64UrlDecode } = require('./titles');
 const SOURCES = {
     ep: require('./sources/eporner'),
     rt: require('./sources/redtube'),
+    // Porntrex file links are tied to the IP that loaded the page; the relay
+    // fetches both through net.js (IPv4), so they match.
+    pt: require('./sources/porntrex'),
 };
 
 const RESOLVE_TTL_MS = 20 * 60 * 1000;
