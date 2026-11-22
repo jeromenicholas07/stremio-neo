@@ -75,6 +75,15 @@ function IncRdJob({ token, queryParams }) {
         leaving.current = true;
         window.location.replace(href);
     }, []);
+    // Back to the title page's own history entry, which auto-pick marked when
+    // it left it, so it doesn't auto-pick (and start this download) again. A
+    // fresh entry (no history to go back to) would; then the title link.
+    const back = React.useCallback(() => {
+        leaving.current = true;
+        const here = window.location.hash;
+        window.history.back();
+        setTimeout(() => { if (window.location.hash === here) window.location.replace(titleLink); }, 600);
+    }, [titleLink]);
 
     React.useEffect(() => {
         let timer = null;
@@ -114,13 +123,13 @@ function IncRdJob({ token, queryParams }) {
             go(`${titleLink}?autopickRetry=${Date.now()}&autopickReason=unavailable`);
             return;
         }
-        go(titleLink);
-    }, [token, titleId, titleLink, go]);
+        back();
+    }, [token, titleId, titleLink, go, back]);
 
     const cancel = React.useCallback(async () => {
         try { await jobRequest(token, 'DELETE'); } catch { /* lapses anyway */ }
-        go(titleLink);
-    }, [token, titleLink, go]);
+        back();
+    }, [token, back]);
 
     const failed = job && FAILED.has(job.state);
 

@@ -1,8 +1,11 @@
 @import (reference) '~stremio/common/screen-sizes.less';
 
+// Fixed to the window: the router's route container can sit offset while
+// it transitions from the title page.
 .page {
-    position: absolute;
+    position: fixed;
     inset: 0;
+    z-index: 10;
     display: flex;
     align-items: center;
     justify-content: center;
