@@ -167,14 +167,70 @@ async function searchTorrentsCsv({ query }) {
     return out;
 }
 
+// ─── XXXClub (adult public tracker, HTML) ────────────────────────────────
+// https://xxxclub.to/torrents/search/all/<query> → one page of rows. Each
+// row's title link carries the info hash in its id ("#i<40 hex>", checked
+// against the details page's magnet 2026-11-23), so one request gives
+// playable results. Through Prowlarr the same search needed a details-page
+// fetch per result, 3 s apart, and queued for minutes.
+const decodeEntities = (s) => String(s || '')
+    .replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#0?39;|&apos;/g, '\'')
+    .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&nbsp;/g, ' ');
+const textOf = (html) => decodeEntities(String(html || '').replace(/<[^>]+>/g, '')).replace(/\s+/g, ' ').trim();
+
+function parseSize(s) {
+    const m = String(s || '').match(/([\d.,]+)\s*(B|KB|MB|GB|TB)/i);
+    if (!m) return 0;
+    const pow = { B: 0, KB: 1, MB: 2, GB: 3, TB: 4 }[m[2].toUpperCase()];
+    return Math.round(parseFloat(m[1].replace(',', '')) * 1024 ** pow);
+}
+
+function parseXxxclub(html) {
+    const start = String(html || '').indexOf('class="tsearch"');
+    if (start < 0) return [];
+    const out = [];
+    for (const row of html.slice(start).split(/<li>/).slice(2)) {
+        const link = row.match(/<a href="\/torrents\/details\/[^"]*"[^>]*id="#i([a-f0-9]{40})"[^>]*>([\s\S]*?)<\/a>/i);
+        if (!link) continue;
+        const span = (cls) => textOf((row.match(new RegExp(`<span class="${cls}[^"]*">([\\s\\S]*?)</span>`)) || [])[1]);
+        const added = Date.parse(span('adde'));
+        const item = normalize({
+            title: textOf(link[2]),
+            infoHash: link[1],
+            seeders: parseInt(span('see'), 10) || 0,
+            peers: parseInt(span('lee'), 10) || 0,
+            size: parseSize(span('siz')),
+            pubDate: Number.isFinite(added) ? new Date(added).toISOString() : '',
+            indexer: 'XXXClub',
+        });
+        if (item) out.push(item);
+    }
+    return out;
+}
+
+async function searchXxxclub({ query }) {
+    const words = String(query || '').replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+    if (!words) return [];
+    const url = `https://xxxclub.to/torrents/search/all/${encodeURIComponent(words)}`;
+    const get = () => fetch(url, { timeout: FETCH_TIMEOUT_MS, headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'text/html' } });
+    // Adult domains here get the odd connection reset (SNI filtering); a
+    // second try usually passes.
+    const res = await get().catch(() => get());
+    if (!res.ok) return [];
+    return parseXxxclub(await res.text());
+}
+
 // ─── Adapter registry ────────────────────────────────────────────────────
 // Each adapter: { id, label, search({ query, cat }) -> Promise<item[]> }.
 // (TorrentProject was evaluated but every modern mirror is unreachable, so
 // it is intentionally omitted — Knaben already aggregates 300+ trackers.)
+// `prowlarrName`: the Prowlarr indexer this adapter replaces, which hybrid
+// search then doesn't ask again.
 const SOURCES = [
     { id: 'apibay', label: 'The Pirate Bay', search: searchApibay },
     { id: 'knaben', label: 'Knaben', search: searchKnaben },
     { id: 'torrentscsv', label: 'Torrents-CSV', search: searchTorrentsCsv },
+    { id: 'xxxclub', label: 'XXXClub', search: searchXxxclub, prowlarrName: 'XXXClub' },
 ];
 
-module.exports = { SOURCES, buildMagnet, isHash40 };
+module.exports = { SOURCES, buildMagnet, isHash40, parseXxxclub };

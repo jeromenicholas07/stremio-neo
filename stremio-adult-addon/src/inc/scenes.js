@@ -47,6 +47,9 @@ function releaseFromMeta(meta) {
         quality: meta.quality || '',
         indexer: meta.indexer || '',
         href: meta.deepLinks && meta.deepLinks.player,
+        // Prowlarr's .torrent link, for a release found without a hash
+        // (PornoLab, XXXClub): the title page resolves the best few.
+        downloadUrl: meta.infoHash ? '' : String(payload.downloadUrl || ''),
         torrentId: meta.id,
     };
 }

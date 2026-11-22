@@ -22,6 +22,7 @@ const relay = require('./relay');
 const streamsOut = require('./streams');
 const store = require('./store');
 const { checkCached } = require('../rd');
+const { resolveInfoHashFromDownloadUrl, isMetered } = require('../prowlarr');
 const { liveSwarm } = require('./scrape');
 const taste = require('./taste');
 const entities = require('./searchEntities');
@@ -504,10 +505,14 @@ async function streams(id, fallback) {
         if (!t) return [];
         if (fallback && fallback.releases) scenes.seed({ ...t, id }, fallback.releases);
         const [results, clearnet] = await Promise.all([
-            Promise.all(releaseQueries(t).map((q) => safe(handleCatalog('adult-search', { search: q })))),
+            // A title page can wait longer for Prowlarr than a search page:
+            // its indexers (PornoLab, XXXClub) are where many scenes the
+            // public sources lack turn up.
+            Promise.all(releaseQueries(t).map((q) => safe(handleCatalog('adult-search', { search: q, prowlarrWaitMs: TITLE_PROWLARR_WAIT_MS })))),
             t.kind === 'scene' ? safe(clearnetCopies(t)) : Promise.resolve([]),
         ]);
-        const found = scenes.addReleases({ ...t, id }, results.flatMap((r) => (r && r.metas) || []));
+        const matched = scenes.addReleases({ ...t, id }, results.flatMap((r) => (r && r.metas) || []));
+        const found = await withResolvedHashes(matched);
         // Live seeders and the RD cache check run side by side (RD checks the
         // releases with the most listed seeders; it only adds [RD+] entries).
         // No pre-warming: opening a title doesn't touch any swarm. The
@@ -516,6 +521,49 @@ async function streams(id, fallback) {
         return [...streamsOut.fromReleases(releases, { title: t, rdCached, rdEnabled: Boolean(store.getRdToken()) }), ...clearnet];
     }
     return [];
+}
+
+// Prowlarr lists some indexers' releases without a hash (PornoLab, XXXClub:
+// a .torrent link). Without one a release can't be scraped for live
+// seeders, checked on Real-Debrid or auto-picked, so the best-seeded few
+// matched to this title are resolved here (one .torrent fetch each, cached
+// for good). PornoLab rations downloads per day, so a title spends at most
+// one of them, and only when no release with a hash has real seeders.
+const TITLE_PROWLARR_WAIT_MS = 12000;
+const RESOLVE_HASHES = 4;
+const RESOLVE_METERED = 1;
+const RESOLVE_BUDGET_MS = 8000;
+async function withResolvedHashes(releases) {
+    const bySeeders = releases
+        .filter((r) => !r.infoHash && r.downloadUrl)
+        .sort((a, b) => (b.seeders || 0) - (a.seeders || 0));
+    const hasHealthy = releases.some((r) => r.infoHash && (r.seeders || 0) >= 5);
+    const todo = [
+        ...bySeeders.filter((r) => !isMetered(r.indexer)).slice(0, RESOLVE_HASHES),
+        ...(hasHealthy ? [] : bySeeders.filter((r) => isMetered(r.indexer)).slice(0, RESOLVE_METERED)),
+    ];
+    if (todo.length) {
+        const work = mapLimit(todo, 2, async (r) => {
+            const res = await resolveInfoHashFromDownloadUrl(r.downloadUrl, { indexer: r.indexer }).catch(() => null);
+            if (res && res.infoHash) r.infoHash = res.infoHash.toLowerCase();
+        });
+        await Promise.race([work, new Promise((done) => setTimeout(done, RESOLVE_BUDGET_MS))]);
+    }
+    // A resolved release may be one another index listed with its hash:
+    // one entry per torrent, the best-seeded listing.
+    const byHash = new Map();
+    const out = [];
+    for (const r of releases) {
+        const h = r.infoHash && r.infoHash.toLowerCase();
+        if (!h) { out.push(r); continue; }
+        const prev = byHash.get(h);
+        if (!prev) { byHash.set(h, r); out.push(r); continue; }
+        if ((r.seeders || 0) > (prev.seeders || 0)) {
+            out[out.indexOf(prev)] = r;
+            byHash.set(h, r);
+        }
+    }
+    return out;
 }
 
 // Replace each release's indexed seeder count with the live tracker count
@@ -705,4 +753,4 @@ async function tags() {
     return tagCache;
 }
 
-module.exports = { row, rowList, title, streams, search, tags, mergeTube, releaseQueries, copyConfidence };
+module.exports = { row, rowList, title, streams, search, tags, mergeTube, releaseQueries, copyConfidence, _withResolvedHashes: withResolvedHashes };

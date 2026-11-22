@@ -418,6 +418,10 @@ async function resolveInfoHashFromDownloadUrl(downloadUrl, { indexer = '' } = {}
                 markIndexerColdNow(indexer, `http_${res.status}_quota`);
                 return { infoHash: null, reason: 'quota_exceeded' };
             }
+            // On a metered indexer this is how a spent daily allowance shows
+            // (Prowlarr hides the tracker's page), so it counts toward
+            // the cold state: three in ten minutes and it rests an hour.
+            if (isMetered(indexer)) recordIndexerFailure(indexer, `http_${res.status}_metered`);
             // Soft failure — random 5xx is a routine occurrence; don't
             // penalise the indexer just for serving a stale release.
             return { infoHash: null, reason: 'bad_bytes' };
@@ -456,11 +460,49 @@ async function resolveInfoHashFromDownloadUrl(downloadUrl, { indexer = '' } = {}
  * lazy-resolve them at click time via /rd/resolve-url, so the user only
  * spends a quota slot on items they actually intend to play.
  */
+// How many hashless results one search resolves up front: a few per indexer,
+// best-seeded first. Each resolve is a .torrent (or details page) fetch that
+// Prowlarr runs one at a time per indexer, with the indexer's request delay
+// (XXXClub: 3 s), and on PornoLab it uses the account's daily allowance.
+// Resolving whole pages (up to 250) queued minutes of requests per indexer,
+// and new searches on that indexer waited behind them (measured 2026-11-23:
+// XXXClub searches hung past 70 s). The rest stay lazy: the Incognito title
+// page resolves the releases it matched, and Torrent.js resolves on click.
+const ENRICH_PER_INDEXER = 3;
+const ENRICH_TOTAL = 12;
+
+// Indexers whose .torrent downloads are rationed per account per day
+// (PornoLab: re-downloads pass, new ones fail once the day's allowance is
+// gone, measured 2026-11-23). Search never spends their downloads; the
+// title page spends one only when nothing else can play.
+const METERED_INDEXERS = /pornolab/i;
+const isMetered = (name) => METERED_INDEXERS.test(String(name || ''));
+
+function pickForEnrichment(items) {
+    const byIndexer = new Map();
+    const picked = [];
+    const bySeeders = [...items].sort((a, b) => (Number(b.seeders) || 0) - (Number(a.seeders) || 0));
+    for (const it of bySeeders) {
+        if (picked.length >= ENRICH_TOTAL) break;
+        if (isMetered(it.indexer)) continue;
+        const n = byIndexer.get(it.indexer) || 0;
+        if (n >= ENRICH_PER_INDEXER) continue;
+        byIndexer.set(it.indexer, n + 1);
+        picked.push(it);
+    }
+    return picked;
+}
+
 async function enrichMissingInfoHashes(items) {
-    // IMPORTANT: do NOT filter by seeders here. Real-Debrid's cache often has
-    // a copy even when public trackers show 0 seeders, so pre-filtering
-    // destroys genuinely playable content.
-    const needsResolution = items.filter(it => {
+    // Results whose hash is already cached get it for free; only the few
+    // picked below cost a fetch.
+    for (const it of items) {
+        if (!it.infoHash && it.downloadUrl) {
+            const cached = infoHashCache.get(it.downloadUrl);
+            if (cached) it.infoHash = cached;
+        }
+    }
+    const candidates = items.filter(it => {
         if (it.infoHash) return false;
         if (it.magnetUrl && /btih:/i.test(it.magnetUrl)) return false;
         if (!it.downloadUrl) return false;
@@ -468,15 +510,16 @@ async function enrichMissingInfoHashes(items) {
         if (isIndexerCold(it.indexer)) return false;
         return true;
     });
+    const needsResolution = pickForEnrichment(candidates);
 
     if (items.some(it => isIndexerCold(it.indexer))) {
         const coldNames = [...new Set(items.filter(it => isIndexerCold(it.indexer)).map(it => it.indexer))];
         console.log(`[prowlarr] skipping eager enrichment for cold indexers: ${coldNames.join(', ')} (will lazy-resolve at click time)`);
     }
 
-    // 10 concurrent resolves. Going higher risks 429s from ratio-limited indexers;
-    // the cold-state tracker will back off anyway if failures pile up.
-    const CONCURRENCY = 10;
+    // A few at a time: Prowlarr serialises each indexer's requests anyway,
+    // and ratio-limited indexers answer bursts with 429s.
+    const CONCURRENCY = 4;
     let idx = 0;
     async function worker() {
         while (idx < needsResolution.length) {
@@ -542,7 +585,12 @@ function parseItem(item) {
  * @param {string} [options.sortBy] - 'seeders' or 'date' (default: date)
  * @returns {Promise<Array>} Array of parsed torrent items
  */
-async function searchProwlarr({ query = '', offset = 0, limit, sortBy = 'date', categories: categoriesOpt } = {}) {
+// `indexerIds`: search only these indexers (hybridSearch asks each one on
+// its own, so a slow indexer doesn't hold back the fast ones). A failed
+// single-indexer search answers [] instead of falling back to every indexer.
+async function searchProwlarr({ query = '', offset = 0, limit, sortBy = 'date', categories: categoriesOpt, indexerIds, timeoutMs = 12000 } = {}) {
+    const single = Array.isArray(indexerIds) && indexerIds.length > 0;
+    const fallback = (opts) => (single ? [] : searchViaTorznab(opts));
     let config = getConfig();
     if (!config.prowlarrApiKey) {
         // Force-reload once in case Prowlarr only just wrote config.xml
@@ -580,6 +628,7 @@ async function searchProwlarr({ query = '', offset = 0, limit, sortBy = 'date', 
             apikey: apiKey,
         });
         for (const cat of categoryList) params.append('categories', String(cat));
+        if (single) for (const id of indexerIds) params.append('indexerIds', String(id));
         const url = `${config.prowlarrUrl}/api/v1/search?${params}`;
         // 12s aggregate timeout — generous enough to let the faster indexers
         // (MyPornClub ~1s, PornoLab ~2.5s, OneJAV ~3s) finish even under
@@ -589,7 +638,7 @@ async function searchProwlarr({ query = '', offset = 0, limit, sortBy = 'date', 
         // single dead indexer never breaks the row.
         return fetch(url, {
             headers: { 'X-Api-Key': apiKey, 'Accept': 'application/json' },
-            timeout: 12000,
+            timeout: timeoutMs,
         });
     }
 
@@ -597,8 +646,8 @@ async function searchProwlarr({ query = '', offset = 0, limit, sortBy = 'date', 
     try {
         response = await doFetch(config.prowlarrApiKey);
     } catch (err) {
-        console.warn('[prowlarr] aggregate /search failed, falling through to Torznab:', err.message);
-        return searchViaTorznab({ query, offset, limit, sortBy, categories: categoryList });
+        if (!single) console.warn('[prowlarr] aggregate /search failed, falling through to Torznab:', err.message);
+        return fallback({ query, offset, limit, sortBy, categories: categoryList });
     }
 
     // On 401, the on-disk key may have rotated (first-run Prowlarr writes a
@@ -613,14 +662,14 @@ async function searchProwlarr({ query = '', offset = 0, limit, sortBy = 'date', 
                 response = await doFetch(config.prowlarrApiKey);
             } catch (err) {
                 console.warn('[prowlarr] retry failed, falling through to Torznab:', err.message);
-                return searchViaTorznab({ query, offset, limit, sortBy, categories: categoryList });
+                return fallback({ query, offset, limit, sortBy, categories: categoryList });
             }
         }
     }
 
     if (!response.ok) {
         // Fallback: try Torznab API directly via indexers
-        return searchViaTorznab({ query, offset, limit, sortBy, categories: categoryList });
+        return fallback({ query, offset, limit, sortBy, categories: categoryList });
     }
 
     const data = await response.json();
@@ -671,7 +720,7 @@ async function searchProwlarr({ query = '', offset = 0, limit, sortBy = 'date', 
     // inside Prowlarr's own 30s budget but the HTTP call itself succeeded),
     // try the per-indexer Torznab path — it uses Promise.allSettled so it's
     // immune to single-indexer failures and often returns something.
-    if (items.length === 0) {
+    if (items.length === 0 && !single) {
         try {
             return await searchViaTorznab({ query, offset, limit, sortBy, categories: categoryList });
         } catch (err) {
@@ -680,6 +729,36 @@ async function searchProwlarr({ query = '', offset = 0, limit, sortBy = 'date', 
     }
 
     return items;
+}
+
+// The indexers a search can ask one by one: enabled in Prowlarr and not
+// paused by it (an indexer Prowlarr disabled after failures answers 400).
+// Refreshed every few minutes; null when Prowlarr can't be asked.
+const INDEXER_LIST_TTL_MS = 3 * 60 * 1000;
+let indexerList = { at: 0, list: null };
+async function listSearchIndexers() {
+    if (indexerList.list && Date.now() - indexerList.at < INDEXER_LIST_TTL_MS) return indexerList.list;
+    const config = getConfig();
+    if (!config.prowlarrApiKey) return null;
+    const get = async (p) => {
+        const res = await fetch(`${config.prowlarrUrl}/api/v1/${p}`, { headers: { 'X-Api-Key': config.prowlarrApiKey }, timeout: 5000 });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.json();
+    };
+    try {
+        const [indexers, status] = await Promise.all([get('indexer'), get('indexerstatus').catch(() => [])]);
+        const now = Date.now();
+        const paused = new Set((Array.isArray(status) ? status : [])
+            .filter((s) => s && s.disabledTill && new Date(s.disabledTill).getTime() > now)
+            .map((s) => s.indexerId));
+        const list = (Array.isArray(indexers) ? indexers : [])
+            .filter((i) => i && i.enable && !paused.has(i.id))
+            .map((i) => ({ id: i.id, name: i.name || '' }));
+        indexerList = { at: now, list };
+        return list;
+    } catch {
+        return null;
+    }
 }
 
 /**
@@ -794,9 +873,12 @@ async function searchViaTorznab({ query = '', offset = 0, limit = 50, sortBy = '
 
 module.exports = {
     searchProwlarr,
+    listSearchIndexers,
     resolveInfoHashFromDownloadUrl,
+    isMetered,
     isIndexerCold,
     getIndexerColdInfo,
     getColdIndexers,
     clearAllColdState,
+    _pickForEnrichment: pickForEnrichment,
 };

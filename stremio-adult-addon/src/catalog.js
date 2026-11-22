@@ -253,10 +253,15 @@ async function handleCatalog(catalogId, extra = {}) {
         if (isSearch) {
             // Search → hybrid: fast direct sources (apibay / Knaben /
             // Torrents-CSV) in parallel, Prowlarr as a bounded supplement.
+            // `prowlarrWaitMs`: a caller that can wait longer for Prowlarr
+            // (the Incognito title page). Not part of the cache key: the
+            // results are the same, only the patience differs.
+            const waitMs = Number(extra.prowlarrWaitMs) || undefined;
             items = await hybridSearch({
                 query,
                 cat: 500,
                 prowlarrOpts: { query, offset: skip, limit: fetchLimit, sortBy, categories: [] },
+                deadlineMs: waitMs,
             });
         } else {
             // Browse catalogs (adult-latest / adult-popular) stay on Prowlarr
@@ -304,7 +309,10 @@ async function handleCatalog(catalogId, extra = {}) {
     // Don't cache empty results — an indexer blip or aggregate timeout
     // that yielded zero items should NOT poison the next 3 hours of
     // requests. Retry on the next request instead.
-    if (result.metas.length > 0) {
+    // Likewise a search Prowlarr was too slow for is only partial: not
+    // cached, so the next request merges Prowlarr's answer (hybridSearch
+    // keeps late answers) with a fresh, fast direct-source search.
+    if (result.metas.length > 0 && !items.prowlarrLate) {
         cache.set(cacheKey, result);
     }
     return result;
