@@ -44,6 +44,7 @@ const {
     recordAutoPickFailure,
 } = require('stremio/common/autoPick');
 const { recordCopyrightBlockObserved } = require('stremio/common/copyrightCheckHistory');
+const { postJson: postIncognito } = require('stremio/routes/Incognito/inc/incApi');
 
 const findTrackByLang = (tracks, lang) => tracks.find((track) => track.lang === lang || langs.where('1', track.lang)?.[2] === lang);
 const findTrackById = (tracks, id) => tracks.find((track) => track.id === id);
@@ -167,6 +168,12 @@ const Player = ({ urlParams, queryParams }) => {
     React.useEffect(() => {
         if (!incognitoStarted && typeof video.state.time === 'number' && video.state.time > 0) setIncognitoStarted(true);
     }, [video.state.time, incognitoStarted]);
+    // Tell the Incognito addon a title really played (its plays feed the
+    // recommendation rows). Once per stream, only after the first frame.
+    React.useEffect(() => {
+        if (!incognitoTitleId || !incognitoStarted) return;
+        postIncognito('/inc/played', { id: incognitoTitleId }).catch(() => { /* older addon or not running */ });
+    }, [incognitoTitleId, incognitoStarted]);
     React.useEffect(() => {
         if (!incognitoTitleId || incognitoStarted) return undefined;
         const timer = setTimeout(() => { retryIncognitoAutoPick('stalled'); }, INCOGNITO_STALL_MS);

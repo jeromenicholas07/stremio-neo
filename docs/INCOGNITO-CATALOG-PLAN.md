@@ -1,9 +1,10 @@
 # Incognito catalog redesign: plan
 
-Status (2026-11-22): Phase 1 is built on branch
-`claude/incognito-catalog-redesign-c89f96`. It is tested against a dev addon
-and the dev web server, but not in the Shell and not deployed. See *Phase 1
-results* below.
+Status (2026-11-22): Phases 1–3 are built on branch
+`claude/incognito-catalog-redesign-c89f96`.
+- P2P playback and the auto-pick retry are tested in the Shell.
+- Recommendations are tested against the dev addon.
+- Nothing is deployed. The weekly Claude picks task isn't created yet.
 
 ## Revised direction (2026-11-22, from your feedback)
 
@@ -878,10 +879,44 @@ results*.**
 - Incognito auto-pick config and ranker, preflight per kind, Player retry
   hook, remembering what played, the RD cached check tested from the Shell.
 
-**Phase 3: recommendations**
+**Phase 3: recommendations. Built 2026-11-22** (`src/inc/taste.js`, the
+`claude` and `foryou` rows in `catalog.js`, `POST /inc/played`).
 
-- `/claude/*` endpoints, the taste export, the weekly scheduled task, and the
-  local fallback row.
+- **Play log.** The Player posts `/inc/played` once an Incognito title
+  shows its first frame. The addon keeps the last 200 plays in `plays.json`:
+  name, studio, performers, tags and time only. A replay within 6 h updates
+  the entry.
+- **Opt-in, as on the Board.** `claude-picks.json` in the Incognito data
+  folder turns it on. Without that file:
+  - no taste snapshot is written;
+  - the "Claude picks" row doesn't exist.
+- **Taste snapshot.** `claude-taste.json` holds favorites and plays, names
+  only. It is rewritten after every play and favorites change, and whenever
+  the Claude row loads.
+- **"Claude picks" row.**
+  - Each pick names a performer, studio, category, search or exact scene.
+  - It becomes up to 3 real titles, playable first, each showing the pick's
+    reason on the card.
+  - Picks are interleaved in the file's order.
+  - Titles you favorited or played are left out.
+- **"More like what you like"** (when there are no picks). It counts the
+  performers, studios and categories that recur in favorites (weight 2) and
+  plays (weight 1), skips ones you already follow, and needs a score of 2.
+- **Privacy.** Both rows and `/inc/played` answer only the app's own
+  origins (a foreign origin got 403).
+- **Speed.** Each pick's torrent search gets 6 s. Past that, the row answers
+  with ThePornDB titles and reports itself pending, while the search
+  finishes in the background (cached 3 h).
+  - Measured with cold searches: first load went from about 80 s to
+    12–18 s.
+  - Follow-up fetches take 2 s.
+  - The Claude row went from 3 to 7 of 9 titles playable as the searches
+    landed.
+- **Weekly task.** The prompt is in `docs/incognito-claude-picks-task.md`,
+  for a scheduled task like the Board's Friday one. It reads only the taste
+  and picks files. It isn't created yet: it would send your Incognito taste
+  to Claude every week, so it waits for your OK.
+- **Not built:** 👎 "not interested".
 
 **Shipping.**
 

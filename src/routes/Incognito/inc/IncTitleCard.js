@@ -63,7 +63,8 @@ function useNearScreen() {
 }
 
 const IncTitleCard = React.memo((props) => {
-    const { id, name, thumbnail, snapshots, duration, kind, studio, date, performers, className } = props;
+    // `reason`: why a recommendation row suggests this title.
+    const { id, name, thumbnail, snapshots, duration, kind, studio, date, performers, reason, className } = props;
     const { isTitle } = useIncFavorites();
     const favorite = isTitle(id);
     const [nearRef, near] = useNearScreen();
@@ -107,7 +108,7 @@ const IncTitleCard = React.memo((props) => {
             onMouseLeave={stop}
             onFocus={start}
             onBlur={stop}
-            title={name}
+            title={reason ? `${name}\n${reason}` : name}
         >
             <span ref={nearRef} className={styles['sentinel']} />
             {thumbnail && !imgFailed ? (
@@ -141,7 +142,7 @@ const IncTitleCard = React.memo((props) => {
             {duration ? <div className={styles['duration']}>{formatDuration(duration)}</div> : null}
             <div className={styles['caption']}>
                 <div className={styles['name']}>{name}</div>
-                {sub ? <div className={styles['sub']}>{sub}</div> : null}
+                {reason ? <div className={styles['reason']}>{reason}</div> : sub ? <div className={styles['sub']}>{sub}</div> : null}
             </div>
         </Button>
     );

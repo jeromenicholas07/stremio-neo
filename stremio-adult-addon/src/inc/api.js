@@ -8,6 +8,7 @@
 const relay = require('./relay');
 const catalog = require('./catalog');
 const favorites = require('./favorites');
+const taste = require('./taste');
 const store = require('./store');
 const streamsOut = require('./streams');
 const { resolveWithRD } = require('../rd');
@@ -103,7 +104,11 @@ function favoriteSnapshot(id) {
 const ENDPOINTS = [
     '/inc/rows', '/inc/row/<id>', '/inc/title/<id>', '/inc/streams/<id>', '/inc/search',
     '/inc/play/<token>', '/inc/rd/<token>', '/inc/img', '/inc/tags', '/inc/favorites', '/inc/config',
+    '/inc/played',
 ];
+
+// Rows built from your favorites and plays answer only the app's own pages.
+const PERSONAL_ROWS = new Set(['favorites', 'claude', 'foryou']);
 
 /** Returns true when the request was an /inc/* request (handled here). */
 function handle(req, res) {
@@ -111,7 +116,7 @@ function handle(req, res) {
     const p = u.pathname;
     if (!p.startsWith('/inc/')) return false;
 
-    const personal = p === '/inc/favorites' || p === '/inc/config' || p === '/inc/rows';
+    const personal = p === '/inc/favorites' || p === '/inc/config' || p === '/inc/rows' || p === '/inc/played';
     if (req.method === 'OPTIONS') { preflight(req, res, personal); return true; }
     if (personal && !originAllowed(req)) { res.statusCode = 403; res.end(); return true; }
 
@@ -140,13 +145,14 @@ function handle(req, res) {
         if ((m = p.match(/^\/inc\/row\/(.+)$/))) {
             const rowId = decodeURIComponent(m[1]);
             const page = parseInt(u.searchParams.get('page') || '1', 10) || 1;
+            const personalRow = PERSONAL_ROWS.has(rowId);
+            if (personalRow && !originAllowed(req)) { res.statusCode = 403; res.end(); return; }
             if (rowId === 'favorites') {
-                if (!originAllowed(req)) { res.statusCode = 403; res.end(); return; }
                 const titles = favorites.get().titles.map((f) => f.snapshot).filter(Boolean);
                 sendJson(req, res, 200, { titles, pending: 0 }, { personal: true });
                 return;
             }
-            sendJson(req, res, 200, await catalog.row(rowId, page));
+            sendJson(req, res, 200, await catalog.row(rowId, page), { personal: personalRow });
             return;
         }
         if ((m = p.match(/^\/inc\/title\/(.+)$/))) {
@@ -175,10 +181,22 @@ function handle(req, res) {
                 const body = await readBody(req);
                 if (!body) { sendJson(req, res, 400, { error: 'bad body' }, { personal: true }); return; }
                 const next = favorites.apply(body);
+                taste.exportTaste();
                 sendJson(req, res, 200, next, { personal: true });
                 return;
             }
             sendJson(req, res, 200, favorites.get(), { personal: true });
+            return;
+        }
+        if (p === '/inc/played') {
+            // The Player reports an Incognito title once it starts playing.
+            // Only the title's name, studio, performers and tags are kept.
+            if (req.method !== 'POST') { sendJson(req, res, 405, { ok: false }, { personal: true }); return; }
+            const body = await readBody(req, 4096);
+            const id = body && typeof body.id === 'string' ? body.id.slice(0, 300) : '';
+            if (!id.startsWith('inc:')) { sendJson(req, res, 400, { ok: false }, { personal: true }); return; }
+            const title = await catalog.title(id, favoriteSnapshot(id));
+            sendJson(req, res, 200, { ok: taste.recordPlay(title) }, { personal: true });
             return;
         }
         if (p === '/inc/config') {

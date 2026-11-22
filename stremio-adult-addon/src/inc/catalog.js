@@ -9,6 +9,8 @@
 //   studio:<name>      a studio's catalogue (ThePornDB)
 //   tag:<name>         a category (ThePornDB search)
 //   amateur            tube videos, Eporner + RedTube merged (the bonus row)
+//   claude             Claude's weekly picks turned into titles (taste.js)
+//   foryou             "More like what you like", from favorites + plays
 const { LRUCache } = require('lru-cache');
 const { handleCatalog } = require('../catalog');
 const eporner = require('./sources/eporner');
@@ -20,6 +22,8 @@ const streamsOut = require('./streams');
 const store = require('./store');
 const { checkCached } = require('../rd');
 const { liveSwarm } = require('./scrape');
+const taste = require('./taste');
+const { mapLimit } = require('./net');
 
 const TUBE = { ep: eporner, rt: redtube };
 const rowCache = new LRUCache({ max: 300 });
@@ -154,8 +158,101 @@ async function indexRowWithTorrents(listing, query, page) {
     return { titles, pending, total: idx && idx.total, availableFirst: true };
 }
 
+// ── Recommendation rows ──────────────────────────────────────
+//
+// A pick names a performer, studio, category, search or scene; it becomes a
+// few real titles (playable ones first), each carrying the pick's reason.
+// Picks are interleaved so the front of the row shows one title per pick,
+// in the order given (the picks file is ordered by confidence).
+const PER_PICK = 3;
+const PLAYABLE_SEEDERS = 5;
+const playable = (t) => t && t.releaseCount > 0 && t.seeders >= PLAYABLE_SEEDERS;
+// A pick's torrent search can take a minute cold (all indexers). Past this
+// budget the row answers with the ThePornDB titles alone and says it is
+// pending; the search keeps going (handleCatalog caches it for 3 h), so the
+// UI's follow-up fetch gets the playable-first order.
+const PICK_BUDGET_MS = 6000;
+const withinBudget = (promise, fallback) => {
+    promise.catch(() => { /* the fallback already answered */ });
+    return Promise.race([promise, new Promise((r) => setTimeout(() => r(null), PICK_BUDGET_MS))])
+        .then((v) => v || fallback());
+};
+
+async function resolvePick(pick) {
+    const hasIndex = tpdb.hasToken();
+    const v = pick.value;
+    let listing = null;
+    if (hasIndex) {
+        if (pick.kind === 'performer') listing = tpdb.performerScenes(v, 1);
+        else if (pick.kind === 'studio') listing = tpdb.siteScenes(v, 1);
+        else listing = tpdb.searchScenes(v, 1);
+    }
+    const query = pick.kind === 'scene' && pick.studio ? `${pick.studio} ${v}` : v;
+    let result;
+    if (listing) {
+        result = await withinBudget(indexRowWithTorrents(listing, query, 1),
+            async () => ({ ...tpdbRow(await safe(listing)), pending: 1 }));
+    } else {
+        result = await withinBudget(
+            safe(handleCatalog('adult-search', { search: query })).then((t) => sceneRow((t && t.metas) || [])),
+            async () => ({ titles: [], pending: 1 }));
+    }
+    let titles = withAvailability(result.titles || []);
+    if (pick.kind === 'scene') {
+        // A named scene: the titles that actually carry that name, or none.
+        const want = norm(v);
+        titles = titles.filter((t) => norm(t.name).includes(want) || want.includes(norm(t.name)));
+        if (pick.studio) {
+            const s = norm(pick.studio);
+            const sameStudio = titles.filter((t) => norm(t.studio).includes(s) || norm(t.studioShort).includes(s.replace(/ /g, '')));
+            if (sameStudio.length) titles = sameStudio;
+        }
+        titles = titles.slice(0, 1);
+    }
+    titles = [...titles.filter(playable), ...titles.filter((t) => !playable(t))];
+    return { titles: titles.map((t) => ({ ...t, reason: pick.reason })), pending: result.pending || 0 };
+}
+
+async function recommendationRow(picks, perPick = PER_PICK) {
+    const resolved = await mapLimit(picks, 3, resolvePick);
+    const lists = resolved.map((r) => (r ? r.titles : []));
+    const seen = taste.seenIds();
+    // Round-robin, up to perPick titles per pick; already favorited or played
+    // titles are skipped, and a title two picks share is listed once.
+    const out = [];
+    const used = new Set();
+    for (let round = 0; round < perPick; round++) {
+        for (const list of lists) {
+            const t = list.find((x) => !used.has(x.id) && !seen.has(x.id));
+            if (!t) continue;
+            used.add(t.id);
+            out.push(t);
+        }
+    }
+    const pending = resolved.reduce((n, r) => n + ((r && r.pending) || 0), 0);
+    return { titles: dedupeScenes(out), pending };
+}
+
+function signalPicks() {
+    return taste.localSignals().map((s) => ({
+        kind: s.kind,
+        value: s.name,
+        studio: '',
+        reason: s.kind === 'tag' ? `More from “${s.name}”, a category that keeps coming up in what you watch`
+            : `Because ${s.name} keeps coming up in your favorites and plays`,
+    }));
+}
+
 async function computeRow(rowId, page) {
     const hasIndex = tpdb.hasToken();
+    if (rowId === 'claude' || rowId === 'foryou') {
+        if (page > 1) return { titles: [], pending: 0 };
+        const picks = rowId === 'claude' ? ((taste.readPicks() || {}).picks || []) : signalPicks();
+        if (!picks.length) return { titles: [], pending: 0 };
+        // The picks run (or a play) is a good moment to refresh the snapshot.
+        if (rowId === 'claude') taste.exportTaste();
+        return recommendationRow(picks);
+    }
     if (rowId === 'scenes:new') {
         return hasIndex ? tpdbRow(await safe(tpdb.latestScenes(page))) : availableScenes(page);
     }
@@ -196,7 +293,9 @@ function withAvailability(titles) {
 }
 
 async function row(rowId, page = 1) {
-    const key = `${rowId}|${page}`;
+    // New picks (a new generatedAt) get a fresh cache entry at once.
+    const version = rowId === 'claude' ? `@${(taste.readPicks() || {}).generatedAt || ''}` : '';
+    const key = `${rowId}${version}|${page}`;
     const hit = rowCache.get(key);
     const result = hit || await computeRow(rowId, page);
     if (!hit) {
@@ -210,8 +309,12 @@ async function row(rowId, page = 1) {
         // Stable: playable scenes first, each group keeps its own order.
         // Playable = a release with enough live seeders to start (same bar
         // as auto-pick on the title page).
-        const playable = (t) => t.releaseCount > 0 && t.seeders >= 5;
         titles = [...titles.filter(playable), ...titles.filter((t) => !playable(t))];
+    }
+    if (rowId === 'claude' || rowId === 'foryou') {
+        // A title played since the row was cached drops out now.
+        const seen = taste.seenIds();
+        titles = titles.filter((t) => !seen.has(t.id));
     }
     return { ...result, titles };
 }
@@ -223,6 +326,11 @@ function rowList(fav) {
     for (const p of fav.performers) rows.push({ id: `perf:${p.name}`, name: p.name, kind: 'performer' });
     for (const s of fav.studios || []) rows.push({ id: `studio:${s.name}`, name: s.name, kind: 'studio' });
     for (const t of fav.tags) rows.push({ id: `tag:${t.name}`, name: t.name, kind: 'tag' });
+    // Claude's picks when you run the weekly task; otherwise the local row,
+    // once your favorites and plays say enough.
+    const picks = taste.readPicks();
+    if (picks && picks.picks.length) rows.push({ id: 'claude', name: 'Claude picks', kind: 'recommended' });
+    else if (taste.localSignals().length) rows.push({ id: 'foryou', name: 'More like what you like', kind: 'recommended' });
     if (hasIndex) rows.push({ id: 'scenes:new', name: 'New scenes' });
     rows.push({ id: 'scenes:available', name: 'Studio releases with torrents' });
     if (hasIndex) rows.push({ id: 'movies', name: 'Full movies' });

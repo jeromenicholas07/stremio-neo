@@ -107,6 +107,8 @@ const ROW_NAMES = {
     'scenes:new': 'New scenes',
     movies: 'Full movies',
     amateur: 'Amateur & clips',
+    claude: 'Claude picks',
+    foryou: 'More like what you like',
 };
 function rowName(rowId) {
     if (ROW_NAMES[rowId]) return ROW_NAMES[rowId];
