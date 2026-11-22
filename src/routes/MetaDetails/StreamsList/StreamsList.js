@@ -80,7 +80,10 @@ function markAutoPickPlayedFromHistoryEntry() {
     }
 }
 
-const StreamsList = ({ className, video, type, metaId, metaLoading, isResumeVideo, onEpisodeSearch, queryParams, ...props }) => {
+// `privateMode` (the Incognito tab): streams don't come from stremio-core, so
+// nothing about them is reported to core — no StreamClicked analytics and no
+// MarkVideoAsWatched.
+const StreamsList = ({ className, video, type, metaId, metaLoading, isResumeVideo, onEpisodeSearch, queryParams, privateMode, ...props }) => {
     const { t } = useTranslation();
     const { core } = useServices();
     const platform = usePlatform();
@@ -165,8 +168,9 @@ const StreamsList = ({ className, video, type, metaId, metaLoading, isResumeVide
         }
     }, [overrideSettings, globalSettings, onOverrideChange]);
     const showInstallAddonsButton = React.useMemo(() => {
+        if (privateMode) return false;
         return !profile || profile.auth === null || profile.auth?.user?.isNewUser === true && !video?.upcoming;
-    }, [profile, video]);
+    }, [profile, video, privateMode]);
     const backDestination = React.useMemo(() => {
         if (video?.deepLinks && typeof video.deepLinks.metaDetailsVideos === 'string') {
             return video.deepLinks.metaDetailsVideos + (
@@ -212,7 +216,7 @@ const StreamsList = ({ className, video, type, metaId, metaLoading, isResumeVide
                     addon: streams.addon,
                     streams: streams.content.content.map((stream) => ({
                         ...stream,
-                        onClick: () => {
+                        onClick: privateMode ? undefined : () => {
                             core.transport.analytics({
                                 event: 'StreamClicked',
                                 args: {
@@ -226,7 +230,7 @@ const StreamsList = ({ className, video, type, metaId, metaLoading, isResumeVide
 
                 return streamsByAddon;
             }, {});
-    }, [props.streams]);
+    }, [props.streams, privateMode]);
     const filteredStreams = React.useMemo(() => {
         const base = selectedAddon === ALL_ADDONS_KEY ?
             Object.values(streamsByAddon).map(({ streams }) => streams).flat(1)
@@ -430,7 +434,7 @@ const StreamsList = ({ className, video, type, metaId, metaLoading, isResumeVide
                 settings,
             });
             if (typeof best.onClick === 'function') best.onClick();
-            if (profile.settings.playerType !== null) {
+            if (profile.settings.playerType !== null && !privateMode) {
                 core.transport.dispatch({
                     action: 'MetaDetails',
                     args: {
@@ -889,7 +893,7 @@ const StreamsList = ({ className, video, type, metaId, metaLoading, isResumeVide
                                     {filteredStreams.map((stream, index) => (
                                         <Stream
                                             key={index}
-                                            videoId={video?.id}
+                                            videoId={privateMode ? undefined : video?.id}
                                             videoReleased={video?.released}
                                             addonName={stream.addonName}
                                             name={stream.name}
@@ -926,6 +930,7 @@ StreamsList.propTypes = {
     isResumeVideo: PropTypes.bool,
     onEpisodeSearch: PropTypes.func,
     queryParams: PropTypes.instanceOf(URLSearchParams),
+    privateMode: PropTypes.bool,
 };
 
 module.exports = StreamsList;

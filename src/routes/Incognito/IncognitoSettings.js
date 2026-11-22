@@ -12,6 +12,9 @@ const { clearCatalogsCache } = require('./useIncognitoCatalogs');
 const { clearSearchCache } = require('./useIncognitoSearch');
 const { clearDetailsCache } = require('./useIncognitoDetails');
 const { clearHistory: clearSearchHistory } = require('./incognitoSearchHistory');
+const IncSettingsSection = require('./inc/IncSettingsSection');
+const { syncRdTokenToAddon } = require('./inc/incApi');
+const { clearRowCaches: clearIncRowCaches } = require('./inc/useIncRows');
 
 // Bundled defaults — every endpoint is loopback and deterministic, so there
 // is nothing the user needs (or should be able) to misconfigure here.
@@ -66,6 +69,7 @@ const IncognitoSettings = React.memo(({ onClose, onResetPin }) => {
             try { clearCatalogsCache(); } catch (_e) { /* ignore */ }
             try { clearSearchCache(); } catch (_e) { /* ignore */ }
             try { clearDetailsCache(); } catch (_e) { /* ignore */ }
+            try { clearIncRowCaches(); } catch (_e) { /* ignore */ }
             try { clearAllCustomRowCaches(); } catch (_e) { /* ignore */ }
             try { clearSearchHistory(); } catch (_e) { /* ignore */ }
 
@@ -94,6 +98,9 @@ const IncognitoSettings = React.memo(({ onClose, onResetPin }) => {
             if (trimmed) localStorage.setItem(RD_TOKEN_KEY, trimmed);
             else localStorage.removeItem(RD_TOKEN_KEY);
             setRdSaved(true);
+            // The catalog's Real-Debrid streams resolve in the addon, which
+            // needs its own copy (the Player sends no page storage).
+            syncRdTokenToAddon(trimmed);
         } catch (_e) { /* ignore */ }
     }, [rdToken]);
 
@@ -183,6 +190,8 @@ const IncognitoSettings = React.memo(({ onClose, onResetPin }) => {
                         {rdSaved ? 'Saved' : 'Save'}
                     </button>
                 </div>
+
+                <IncSettingsSection styles={styles} />
 
                 <div className={styles['settings-divider']} />
 

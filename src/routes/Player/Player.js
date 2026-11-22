@@ -136,6 +136,43 @@ const Player = ({ urlParams, queryParams }) => {
 
     const isNavigating = React.useRef(false);
 
+    // ── Incognito auto-pick retry ──
+    // Incognito plays carry `?incognito=<title id>` (no type/id in the path,
+    // so nothing reaches Library). When the stream was auto-picked there, a
+    // failure — or a start that never happens — goes back to the Incognito
+    // title page, whose StreamsList skips the failed stream and picks the next.
+    const incognitoTitleId = queryParams?.get('incognito') || null;
+    const retryIncognitoAutoPick = React.useCallback((reason) => {
+        if (!incognitoTitleId || isNavigating.current) return false;
+        const selection = getAutoPickSelection('movie', incognitoTitleId, incognitoTitleId);
+        if (!selection) return false;
+        // Only the stream auto-pick chose (its key starts with its player
+        // link) — never one picked by hand after an earlier auto-pick.
+        const thisLink = `#/player/${encodeURIComponent(urlParams.stream || '')}`;
+        if (typeof selection.streamKey !== 'string' || selection.streamKey.split('|')[0].split('?')[0] !== thisLink) return false;
+        recordAutoPickFailure(selection, reason);
+        isNavigating.current = true;
+        window.location.replace(`#/incognito/title/${encodeURIComponent(incognitoTitleId)}?autopickRetry=${Date.now()}&autopickReason=${reason}`);
+        return true;
+    }, [incognitoTitleId, urlParams.stream]);
+    // P2P swarms often stall without an error: nothing has played after
+    // INCOGNITO_STALL_MS → treat it as a failed pick. 60 s because nothing is
+    // pre-warmed: a cold torrent's metadata alone took 18–30 s in testing,
+    // and the first frames need buffering after that.
+    const INCOGNITO_STALL_MS = 60000;
+    // One-way per stream: once playback has started, a later time of 0 or
+    // null (seek to the start, end of file, reload) must never re-arm it.
+    const [incognitoStarted, setIncognitoStarted] = React.useState(false);
+    React.useEffect(() => { setIncognitoStarted(false); }, [urlParams.stream]);
+    React.useEffect(() => {
+        if (!incognitoStarted && typeof video.state.time === 'number' && video.state.time > 0) setIncognitoStarted(true);
+    }, [video.state.time, incognitoStarted]);
+    React.useEffect(() => {
+        if (!incognitoTitleId || incognitoStarted) return undefined;
+        const timer = setTimeout(() => { retryIncognitoAutoPick('stalled'); }, INCOGNITO_STALL_MS);
+        return () => clearTimeout(timer);
+    }, [incognitoTitleId, incognitoStarted, retryIncognitoAutoPick]);
+
     const pressTimer = React.useRef(null);
     const longPress = React.useRef(false);
 
@@ -190,6 +227,9 @@ const Player = ({ urlParams, queryParams }) => {
 
     const onError = React.useCallback((error) => {
         console.error('Player', error);
+        // An Incognito auto-pick: any fatal error sends it back to try the next
+        // stream (P2P swarms fail in more ways than the patterns below cover).
+        if (error.critical && retryIncognitoAutoPick('unavailable')) return;
         const isCopyrightError = error.critical && /copyright/i.test(error.message || '');
         if (isCopyrightError) {
             // The copyright probe is off by default, so this failure IS the
@@ -227,7 +267,7 @@ const Player = ({ urlParams, queryParams }) => {
                 timeout: 3000
             });
         }
-    }, [urlParams.type, urlParams.id, urlParams.videoId]);
+    }, [urlParams.type, urlParams.id, urlParams.videoId, retryIncognitoAutoPick]);
 
     const onSubtitlesTrackLoaded = React.useCallback(() => {
         toast.show({

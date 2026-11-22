@@ -46,7 +46,9 @@ const SOURCES = [
     // Keyed by add-on name, but shown neutrally: this bucket is "P2P streams
     // from the main source add-on", as distinct from the catch-all below.
     // The key is persisted in user settings and must not be renamed.
-    { key: 'torrentio', label: 'Main add-on (P2P)', test: (stream) => /torrentio/i.test(stream?.addonName || '') },
+    // Incognito titles' P2P streams (marked `incognitoP2P` by the Incognito
+    // details page) are that tab's main P2P source, so they share this bucket.
+    { key: 'torrentio', label: 'Main add-on (P2P)', test: (stream) => /torrentio/i.test(stream?.addonName || '') || stream?.incognitoP2P === true },
     { key: 'other', label: 'Other / P2P', test: () => true },
 ];
 

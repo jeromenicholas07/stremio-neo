@@ -36,6 +36,7 @@ const EVICTABLE_PREFIXES = [
     'incognito_custom_row_cache_v2:',
     'incognito_catalogs_cache_v2',
     'incognito_search_cache_v2',
+    'incognito_inc_row_v1:', // clearnet catalog row cards (the addon re-serves them)
     'trakt_response_cache_v1',
 ];
 

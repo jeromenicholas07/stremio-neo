@@ -197,3 +197,5 @@ const useIncognitoPlay = () => {
 };
 
 module.exports = useIncognitoPlay;
+
+module.exports.encodeStreamForCore = encodeStreamForCore;

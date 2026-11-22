@@ -12,13 +12,26 @@ const IncognitoSearchResults = require('./IncognitoSearchResults');
 const IncognitoCard = require('./IncognitoCard');
 const useIncognitoCatalogs = require('./useIncognitoCatalogs');
 const useIncognitoCustomRows = require('./useIncognitoCustomRows');
+const IncHome = require('./inc/IncHome');
+const IncMetaDetails = require('./inc/IncMetaDetails');
+const IncRowPage = require('./inc/IncRowPage');
+const { isSupported: isIncSupported } = require('./inc/incApi');
 const styles = require('./styles');
 
-const Incognito = ({ urlParams }) => {
+const Incognito = ({ urlParams, queryParams }) => {
     const { state: pinState, createPin, verifyPin, resetPin, lock } = usePinGate();
     const [showSettings, setShowSettings] = React.useState(false);
     const { catalogs, loading: catalogsLoading, addonUrl } = useIncognitoCatalogs();
     const customCatalogs = useIncognitoCustomRows();
+    // The clearnet catalog needs an addon new enough to serve /inc/*. The web
+    // UI updates before the launcher does, so older addons keep the torrent
+    // rows. null = still checking.
+    const [incSupported, setIncSupported] = React.useState(null);
+    React.useEffect(() => {
+        let alive = true;
+        isIncSupported().then((ok) => { if (alive) setIncSupported(ok); });
+        return () => { alive = false; };
+    }, []);
 
     const subpage = urlParams && urlParams.subpage;
     const subpageArg = urlParams && urlParams.subpageArg;
@@ -49,6 +62,11 @@ const Incognito = ({ urlParams }) => {
     }
     if (pinState === 'locked') {
         return <PinDialog mode="verify" onVerifyPin={verifyPin} />;
+    }
+
+    // A title is a full page, laid out like Stremio's own details page.
+    if (subpage === 'title' && subpageArg) {
+        return <IncMetaDetails id={decodeURIComponent(subpageArg)} queryParams={queryParams} />;
     }
 
     // No addon configured — setup prompt
@@ -108,6 +126,16 @@ const Incognito = ({ urlParams }) => {
                 <IncognitoDetails id={decodeURIComponent(subpageArg)} />
             </React.Fragment>
         );
+    } else if (subpage === 'row' && subpageArg) {
+        body = (
+            <React.Fragment>
+                <div className={styles['incognito-header']}>
+                    <div className={styles['header-left']} />
+                    {renderIcons()}
+                </div>
+                <IncRowPage rowId={decodeURIComponent(subpageArg)} />
+            </React.Fragment>
+        );
     } else if (subpage === 'search' && subpageArg) {
         body = (
             <React.Fragment>
@@ -128,19 +156,24 @@ const Incognito = ({ urlParams }) => {
                     {renderIcons()}
                 </div>
                 <div className={styles['catalog-rows']}>
+                    {incSupported ? (
+                        <IncHome rowClassName={styles['catalog-row']} />
+                    ) : null}
                     {catalogsLoading ? (
-                        <div className={styles['loading-container']}>Loading catalogs…</div>
+                        incSupported ? null : <div className={styles['loading-container']}>Loading catalogs…</div>
                     ) : catalogs.length === 0 && customCatalogs.length === 0 ? (
-                        <div className={styles['empty-message']}>
-                            No catalogs available. Check your addon connection in settings.
-                        </div>
+                        incSupported ? null : (
+                            <div className={styles['empty-message']}>
+                                No catalogs available. Check your addon connection in settings.
+                            </div>
+                        )
                     ) : (
                         <React.Fragment>
                             {catalogs.map((catalog) => (
                                 <MetaRow
                                     key={catalog.id}
                                     className={classnames(styles['catalog-row'], 'animation-fade-in')}
-                                    title={catalog.name}
+                                    title={incSupported ? `Torrents · ${catalog.name}` : catalog.name}
                                     catalog={catalog}
                                     itemComponent={IncognitoCard}
                                 />

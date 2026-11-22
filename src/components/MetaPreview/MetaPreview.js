@@ -22,10 +22,12 @@ const { Ratings } = require('./Ratings');
 const ALLOWED_LINK_REDIRECTS = [
     routesRegexp.search.regexp,
     routesRegexp.discover.regexp,
-    routesRegexp.metadetails.regexp
+    routesRegexp.metadetails.regexp,
+    // Incognito title pages link performers, studios and categories to their rows.
+    routesRegexp.incognito.regexp
 ];
 
-const MetaPreview = React.forwardRef(({ className, compact, name, logo, background, runtime, releaseInfo, released, description, deepLinks, links, trailerStreams, inLibrary, toggleInLibrary, ratingInfo }, ref) => {
+const MetaPreview = React.forwardRef(({ className, compact, name, logo, background, runtime, releaseInfo, released, description, deepLinks, links, trailerStreams, inLibrary, toggleInLibrary, libraryLabels, ratingInfo }, ref) => {
     const { t } = useTranslation();
     const [shareModalOpen, openShareModal, closeShareModal] = useBinaryState(false);
     const linksGroups = React.useMemo(() => {
@@ -200,7 +202,7 @@ const MetaPreview = React.forwardRef(({ className, compact, name, logo, backgrou
                         <ActionButton
                             className={styles['action-button']}
                             icon={inLibrary ? 'remove-from-library' : 'add-to-library'}
-                            label={inLibrary ? t('REMOVE_FROM_LIB') : t('ADD_TO_LIB')}
+                            label={inLibrary ? (libraryLabels?.remove || t('REMOVE_FROM_LIB')) : (libraryLabels?.add || t('ADD_TO_LIB'))}
                             tooltip={compact}
                             tabIndex={compact ? -1 : 0}
                             onClick={toggleInLibrary}
@@ -298,6 +300,8 @@ MetaPreview.propTypes = {
     trailerStreams: PropTypes.array,
     inLibrary: PropTypes.bool,
     toggleInLibrary: PropTypes.func,
+    // Replaces the Library wording (the Incognito tab uses Favorites instead).
+    libraryLabels: PropTypes.shape({ add: PropTypes.string, remove: PropTypes.string }),
     ratingInfo: PropTypes.object,
 };
 

@@ -173,7 +173,7 @@ async function getOrCreateListing({ infoHash, title, token }) {
     return entry;
 }
 
-async function resolveWithRD({ infoHash, title, token, fileId }) {
+async function resolveWithRD({ infoHash, title, token, fileId, readyTimeoutMs }) {
     const listing = await getOrCreateListing({ infoHash, title, token });
 
     // Pick the file to resolve. If fileId is provided and matches a listed
@@ -196,10 +196,15 @@ async function resolveWithRD({ infoHash, title, token, fileId }) {
         { files: String(targetFile.id) }
     );
     if (!selRes.ok && selRes.status !== 204) {
-        throw new Error(`selectFiles failed: ${selRes.status}`);
+        // Files already selected (e.g. by checkCached) is fine when the
+        // torrent is ready; anything else is a real failure.
+        const info = await rdFetch(token, 'GET', `/torrents/info/${listing.torrentId}`);
+        if (!(info.ok && info.body && info.body.status === 'downloaded')) {
+            throw new Error(`selectFiles failed: ${selRes.status}`);
+        }
     }
 
-    const ready = await pollTorrentReady(token, listing.torrentId);
+    const ready = await pollTorrentReady(token, listing.torrentId, readyTimeoutMs ? { timeoutMs: readyTimeoutMs } : undefined);
     if (!Array.isArray(ready.links) || ready.links.length === 0) {
         throw new Error('RD torrent downloaded but has no links');
     }
@@ -362,4 +367,72 @@ async function handleFiles(req, res) {
     }
 }
 
-module.exports = { handleResolve, handleFiles, handleResolveUrl, resolveWithRD };
+// ── Is this torrent already cached on Real-Debrid? ──
+//
+// RD withdrew its instant-availability endpoint, so the only way to know is
+// to add the magnet, select the video, and look at the status: a cached
+// torrent is "downloaded" straight away. Uncached torrents are deleted again
+// at once, so checking never leaves downloads running on the account.
+// Verdicts are remembered (cached ones for longer: they rarely drop out).
+const cachedVerdicts = new LRUCache({ max: 3000 });
+const VERDICT_TTL_CACHED_MS = 6 * 60 * 60 * 1000;
+const VERDICT_TTL_UNCACHED_MS = 60 * 60 * 1000;
+
+async function deleteTorrent(token, normalized, torrentId) {
+    listingCache.delete(`${token.slice(0, 8)}:${normalized}`);
+    for (const key of resolveCache.keys()) {
+        if (key.startsWith(`${token.slice(0, 8)}:${normalized}:`)) resolveCache.delete(key);
+    }
+    try { await rdFetch(token, 'DELETE', `/torrents/delete/${torrentId}`); } catch { /* best effort */ }
+}
+
+async function checkCached({ infoHash, title, token, budgetMs = 7000 }) {
+    if (!token || !/^[a-f0-9]{40}$/i.test(infoHash || '')) return false;
+    const normalized = infoHash.toLowerCase();
+    const verdictKey = `${token.slice(0, 8)}:${normalized}`;
+    const known = cachedVerdicts.get(verdictKey);
+    if (known !== undefined) return known;
+
+    let timedOut = false;
+    const listingPromise = getOrCreateListing({ infoHash: normalized, title, token });
+    let listing;
+    try {
+        listing = await Promise.race([
+            listingPromise,
+            new Promise((_, reject) => setTimeout(() => { timedOut = true; reject(new Error('timeout')); }, budgetMs)),
+        ]);
+    } catch {
+        // Cached magnets list their files instantly; a slow listing means RD
+        // is still fetching metadata, i.e. not cached. Clean up once it lands.
+        if (timedOut) {
+            listingPromise.then((l) => deleteTorrent(token, normalized, l.torrentId)).catch(() => { /* gone already */ });
+        }
+        cachedVerdicts.set(verdictKey, false, { ttl: VERDICT_TTL_UNCACHED_MS });
+        return false;
+    }
+
+    let cached = false;
+    try {
+        const idx = pickLargestVideoIdx(listing.files);
+        const file = listing.files[idx];
+        if (file) {
+            await rdFetch(token, 'POST', `/torrents/selectFiles/${listing.torrentId}`, { files: String(file.id) });
+            // A cached torrent flips to "downloaded" within a moment; one RD
+            // has to fetch reports "downloading"/"queued" with no progress.
+            for (let i = 0; i < 3 && !cached; i++) {
+                if (i) await new Promise((r) => setTimeout(r, 700));
+                const info = await rdFetch(token, 'GET', `/torrents/info/${listing.torrentId}`);
+                const status = info.ok && info.body ? info.body.status : '';
+                if (status === 'downloaded') cached = true;
+                else if (status === 'downloading' && Number(info.body.progress) > 0) break;
+                else if (/error|virus|dead/.test(status)) break;
+            }
+        }
+    } catch { /* treat as not cached */ }
+
+    if (!cached) await deleteTorrent(token, normalized, listing.torrentId);
+    cachedVerdicts.set(verdictKey, cached, { ttl: cached ? VERDICT_TTL_CACHED_MS : VERDICT_TTL_UNCACHED_MS });
+    return cached;
+}
+
+module.exports = { handleResolve, handleFiles, handleResolveUrl, resolveWithRD, checkCached };

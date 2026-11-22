@@ -5,7 +5,7 @@ const { addonBuilder, getRouter } = require('stremio-addon-sdk');
 // launcher console makes it obvious which addon is actually running —
 // invaluable when diagnosing "it's still the old version" reports
 // (zombie node processes, stale extracts, AV-blocked overwrites).
-const ADDON_INTERNAL_VERSION = '2026-05-08-hybrid-search';
+const ADDON_INTERNAL_VERSION = '2026-11-22-clearnet-catalog';
 
 const { handleCatalog, clearCatalogCache } = require('./src/catalog');
 const { handleSearch } = require('./src/search');
@@ -18,6 +18,7 @@ const {
     handleResolveUrl: handleRdResolveUrl,
 } = require('./src/rd');
 const { clearAllColdState } = require('./src/prowlarr');
+const incApi = require('./src/inc/api');
 const { getConfig } = require('./src/config');
 
 const GENRES = [
@@ -154,6 +155,10 @@ const router = getRouter(builder.getInterface());
 const server = http.createServer((req, res) => {
     const pathname = (req.url || '/').split('?')[0];
 
+    // Clearnet catalog: rows, titles, streams, play relay, image proxy,
+    // favorites. Handles its own CORS (personal endpoints are origin-locked).
+    if (incApi.handle(req, res)) return;
+
     if (pathname === '/status' || pathname === '/config' || pathname === '/config.json') {
         handleStatusEndpoint(req, res);
         return;
@@ -167,7 +172,7 @@ const server = http.createServer((req, res) => {
         res.setHeader('Content-Type', 'application/json');
         res.end(JSON.stringify({
             version: ADDON_INTERNAL_VERSION,
-            endpoints: ['/rd/resolve', '/rd/files', '/rd/resolve-url', '/cache/clear', '/version', '/status'],
+            endpoints: ['/rd/resolve', '/rd/files', '/rd/resolve-url', '/cache/clear', '/version', '/status', ...incApi.ENDPOINTS],
         }));
         return;
     }
