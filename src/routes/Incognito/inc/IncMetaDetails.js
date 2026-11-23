@@ -91,7 +91,7 @@ function useIncTitle(id) {
         getJson(`/inc/streams/${encodeURIComponent(id)}`, { signal, timeoutMs: 120000 })
             .then(async (res) => {
                 const streams = await withDeepLinks(Array.isArray(res.streams) ? res.streams : [], id);
-                if (!signal.aborted) setState((s) => ({ ...s, groups: streams }));
+                if (!signal.aborted) setState((s) => ({ ...s, groups: streams, background: res.background || null }));
             })
             .catch(() => { if (!signal.aborted) setState((s) => ({ ...s, groups: [] })); });
         return () => controller.abort();
@@ -99,8 +99,19 @@ function useIncTitle(id) {
     return state;
 }
 
+// A favorite with thin coverage is cached on Real-Debrid in the background
+// (the addon's rdBackground.js); its status leads the description.
+function backgroundNote(bg) {
+    if (!bg) return '';
+    if (bg.state === 'downloading') return `Caching on Real-Debrid in the background: ${Math.round(bg.progress || 0)}%. It plays instantly once that's done.`;
+    if (bg.state === 'queued' || bg.state === 'checking') return 'Checking whether Real-Debrid should cache this favorite…';
+    if (bg.state === 'cached' && !/already/.test(bg.message || '')) return 'Cached on Real-Debrid for you: plays instantly.';
+    if (bg.state === 'failed') return `Couldn't cache this on Real-Debrid yet (${bg.message}). It's checked again in a few days.`;
+    return '';
+}
+
 function IncMetaDetails({ id, queryParams: routeQueryParams }) {
-    const { title, loading, groups } = useIncTitle(id);
+    const { title, loading, groups, background: bgStatus } = useIncTitle(id);
     const fav = useIncFavorites();
     // Carries ?autopickRetry=… when the Player sends a failed pick back.
     const queryParams = React.useMemo(() => routeQueryParams || new URLSearchParams(), [routeQueryParams]);
@@ -166,7 +177,7 @@ function IncMetaDetails({ id, queryParams: routeQueryParams }) {
                         runtime={formatRuntime(title.duration)}
                         releaseInfo={title.kind === 'tube' ? title.siteName : (title.kind === 'movie' ? 'Movie' : title.studio)}
                         released={released}
-                        description={title.description || undefined}
+                        description={[backgroundNote(bgStatus), title.description].filter(Boolean).join('\n\n') || undefined}
                         links={links}
                         inLibrary={isFav}
                         toggleInLibrary={toggleFavorite}

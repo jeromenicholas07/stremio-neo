@@ -574,6 +574,37 @@ async function withResolvedHashes(releases) {
     return out;
 }
 
+/**
+ * How well a scene or movie is covered, for background caching of thin
+ * favorites (rdBackground.js): gathers its releases the way its title page
+ * does, then → { cached, healthy, candidates } where `cached` = Real-Debrid
+ * has one, `healthy` = a release has ≥ 5 live seeders, and `candidates` are
+ * the releases RD could still fetch (swarm seen by RD first, then by
+ * seeders; dead magnets left out). null for titles without torrents.
+ */
+async function coverage(id, fallback) {
+    if (!id.startsWith('inc:scene:') && !id.startsWith('inc:movie:')) return null;
+    const t = (await title(id, fallback)) || fallback;
+    if (!t) return null;
+    const results = await Promise.all(releaseQueries(t).map((q) => safe(handleCatalog('adult-search', { search: q, prowlarrWaitMs: TITLE_PROWLARR_WAIT_MS }))));
+    const found = await withResolvedHashes(scenes.addReleases({ ...t, id }, results.flatMap((r) => (r && r.metas) || [])));
+    const [releases, rdCached] = await Promise.all([withLiveCounts(found), rdCacheVerdicts(found)]);
+    const hashed = releases.filter((r) => r.infoHash);
+    const verdict = (r) => rdCached.get(r.infoHash.toLowerCase());
+    const swarm = (r) => Boolean(rdCached.swarm && rdCached.swarm.has(r.infoHash.toLowerCase()));
+    const best = (r) => Math.max(r.seeders || 0, r.listedSeeders || 0);
+    const candidates = hashed
+        .filter((r) => verdict(r) !== true && (verdict(r) !== false || swarm(r)))
+        .sort((a, b) => Number(swarm(b)) - Number(swarm(a)) || best(b) - best(a))
+        .map((r) => ({ infoHash: r.infoHash.toLowerCase(), name: r.name, seeders: best(r) }));
+    return {
+        name: t.name,
+        cached: hashed.some((r) => verdict(r) === true),
+        healthy: hashed.some((r) => r.liveChecked && (r.seeders || 0) >= 5),
+        candidates,
+    };
+}
+
 // Replace each release's indexed seeder count with the live tracker count
 // (see scrape.js). Releases no tracker answered for keep the indexed number,
 // marked unverified.
@@ -767,4 +798,4 @@ async function tags() {
     return tagCache;
 }
 
-module.exports = { row, rowList, title, streams, search, tags, mergeTube, releaseQueries, copyConfidence, _withResolvedHashes: withResolvedHashes };
+module.exports = { row, rowList, title, streams, coverage, search, tags, mergeTube, releaseQueries, copyConfidence, _withResolvedHashes: withResolvedHashes };

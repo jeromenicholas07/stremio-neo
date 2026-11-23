@@ -14,9 +14,12 @@ const store = require('./store');
 const streamsOut = require('./streams');
 const { resolveWithRD, abandonIfNotReady } = require('../rd');
 const rdJobs = require('./rdJobs');
+const rdBackground = require('./rdBackground');
 
 // Torrents a previous run's download jobs left on the account.
 setTimeout(() => { rdJobs.cleanupLeftovers(store.getRdToken()).catch(() => { /* next start */ }); }, 5000).unref();
+// Background Real-Debrid caching of thin favorites.
+rdBackground.init();
 
 const PERSONAL_ORIGINS = [
     /^https:\/\/jeromenicholas07\.github\.io$/,
@@ -188,7 +191,8 @@ function handle(req, res) {
         if ((m = p.match(/^\/inc\/streams\/(.+)$/))) {
             const id = decodeURIComponent(m[1]);
             const streams = await catalog.streams(id, favoriteSnapshot(id));
-            sendJson(req, res, 200, { streams });
+            // A favorite Real-Debrid is caching in the background (rdBackground.js).
+            sendJson(req, res, 200, { streams, background: rdBackground.statusFor(id) });
             return;
         }
         if (p === '/inc/search') {
@@ -217,6 +221,13 @@ function handle(req, res) {
                 if (!body) { sendJson(req, res, 400, { error: 'bad body' }, { personal: true }); return; }
                 const next = favorites.apply(body);
                 taste.exportTaste();
+                // A favorite nothing plays well yet gets cached on Real-Debrid
+                // in the background; unfavoriting stops that.
+                if (body.type === 'title') {
+                    const tid = typeof body.value === 'string' ? body.value : body.value && body.value.id;
+                    if (body.op === 'add' && body.value && typeof body.value === 'object') rdBackground.consider(tid, body.value);
+                    else if (body.op === 'remove' && tid) rdBackground.forget(tid).catch(() => { /* best effort */ });
+                }
                 sendJson(req, res, 200, next, { personal: true });
                 return;
             }

@@ -5,7 +5,7 @@ const { addonBuilder, getRouter } = require('stremio-addon-sdk');
 // launcher console makes it obvious which addon is actually running —
 // invaluable when diagnosing "it's still the old version" reports
 // (zombie node processes, stale extracts, AV-blocked overwrites).
-const ADDON_INTERNAL_VERSION = '2026-11-23-incognito-rdjobs';
+const ADDON_INTERNAL_VERSION = '2026-11-23-incognito-favcache';
 
 const { handleCatalog, clearCatalogCache } = require('./src/catalog');
 const { handleSearch } = require('./src/search');

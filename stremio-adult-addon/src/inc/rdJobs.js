@@ -50,7 +50,7 @@ const leftoversAtStart = (() => {
 // Torrents on the account that a crash or a closed Stremio would orphan:
 // running jobs, and torrents a cache check parked (rd.js).
 function persist() {
-    const open = [...jobs.values()].filter((j) => ACTIVE.has(j.state) && j.torrentId).map((j) => ({ hash: j.hash, torrentId: j.torrentId }));
+    const open = [...jobs.values()].filter((j) => ACTIVE.has(j.state) && j.torrentId && !j.shared).map((j) => ({ hash: j.hash, torrentId: j.torrentId }));
     try { fs.writeFileSync(JOBS_FILE, JSON.stringify([...open, ...rd.parkedList()])); } catch { /* best effort */ }
 }
 rd.setParkedListener(persist);
@@ -73,8 +73,11 @@ function snapshot(job) {
 async function finish(job, state, message) {
     job.state = state;
     job.message = message || '';
-    rd.unprotectHash(job.hash);
-    if (state !== 'ready' && job.torrentId) await deleteTorrent(job.token, job.hash, job.torrentId);
+    // A torrent shared with a favorite's background download stays theirs.
+    if (!job.shared) {
+        rd.unprotectHash(job.hash);
+        if (state !== 'ready' && job.torrentId) await deleteTorrent(job.token, job.hash, job.torrentId);
+    }
     if (state !== 'ready') console.warn(`[rd-job] ${job.hash.slice(0, 8)}: ${state}${message ? ` (${message})` : ''}`);
     persist();
 }
@@ -140,7 +143,7 @@ async function tick(job) {
         // An "error" right at the start can be RD's leftover state from a
         // copy deleted moments before (the title page's cache check adds
         // and removes the same torrent): one fresh try after a pause.
-        if (b.status === 'error' && !job.retried && now - job.startedAt < EARLY_ERROR_MS) {
+        if (b.status === 'error' && !job.retried && !job.shared && now - job.startedAt < EARLY_ERROR_MS) {
             job.retried = true;
             await deleteTorrent(job.token, job.hash, job.torrentId, { force: true });
             job.torrentId = null;
@@ -219,10 +222,18 @@ async function startOnce({ infoHash, title, token }) {
     };
     jobs.set(hash, job);
     rd.protectHash(hash);
+    // A favorite's background download (rdBackground.js) already fetching
+    // it: follow that torrent, and leave it to the background on cancel.
+    const backgroundId = require('./rdBackground').torrentFor(hash);
     // The title page's cache check may have left RD already fetching it
     // (parked, file selected): take that over rather than adding it again.
-    const parkedId = rd.adoptParked(token, hash);
-    if (parkedId) {
+    const parkedId = backgroundId ? null : rd.adoptParked(token, hash);
+    if (backgroundId) {
+        job.torrentId = backgroundId;
+        job.shared = true;
+        job.selected = true;
+        job.state = 'finding';
+    } else if (parkedId) {
         job.torrentId = parkedId;
         job.selected = true;
         job.state = 'finding';
