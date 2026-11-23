@@ -106,6 +106,31 @@ describe('download job', () => {
         expect(calls).toEqual([]);
     }, 10000);
 
+    it('saves parked torrents with running jobs, for cleanup after a restart', async () => {
+        const fsMod = require('fs');
+        const file = path.join(dataDir, 'rd-jobs.json');
+        let n = 0;
+        rd._setRdFetch(async (token, method, p) => {
+            if (p === '/torrents/addMagnet') return { ok: true, status: 201, body: { id: 'K1' } };
+            if (p.startsWith('/torrents/info/')) { n++; return { ok: true, status: 200, body: n === 1 ? { status: 'waiting_files_selection', files } : { status: 'downloading', files } }; }
+            return { ok: true, status: 204, body: null };
+        });
+        await rd.checkCached({ infoHash: 'e'.repeat(40), title: 'x', token: TOKEN });
+        expect(JSON.parse(fsMod.readFileSync(file, 'utf8'))).toEqual([{ hash: 'e'.repeat(40), torrentId: 'K1' }]);
+        rd.adoptParked(TOKEN, 'e'.repeat(40));
+        expect(JSON.parse(fsMod.readFileSync(file, 'utf8'))).toEqual([]);
+    }, 10000);
+
+    it('shares one job when two starts arrive at once', async () => {
+        const calls = fakeRd({ status: 'downloading', progress: 5 });
+        const [a, b] = await Promise.all([
+            rdJobs.start({ infoHash: HASH, title: 'Scene', token: TOKEN }),
+            rdJobs.start({ infoHash: HASH, title: 'Scene', token: TOKEN }),
+        ]);
+        expect(a).toEqual(b);
+        expect(calls.filter((c) => c === 'POST /torrents/addMagnet')).toHaveLength(1);
+    });
+
     it('rejoins the running job instead of adding the torrent again', async () => {
         const calls = fakeRd({ status: 'downloading', progress: 5 });
         await rdJobs.start({ infoHash: HASH, title: 'Scene', token: TOKEN });

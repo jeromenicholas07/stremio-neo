@@ -38,10 +38,22 @@ const JOBS_FILE = path.join(getCacheDir() || os.tmpdir(), 'rd-jobs.json');
 const jobs = new Map(); // infoHash → job
 let ticker = null;
 
+const leftoversAtStart = (() => {
+    try {
+        const list = JSON.parse(fs.readFileSync(JOBS_FILE, 'utf8'));
+        return Array.isArray(list) ? list.filter((x) => x && /^[a-f0-9]{40}$/.test(x.hash) && x.torrentId) : [];
+    } catch {
+        return [];
+    }
+})();
+
+// Torrents on the account that a crash or a closed Stremio would orphan:
+// running jobs, and torrents a cache check parked (rd.js).
 function persist() {
     const open = [...jobs.values()].filter((j) => ACTIVE.has(j.state) && j.torrentId).map((j) => ({ hash: j.hash, torrentId: j.torrentId }));
-    try { fs.writeFileSync(JOBS_FILE, JSON.stringify(open)); } catch { /* best effort */ }
+    try { fs.writeFileSync(JOBS_FILE, JSON.stringify([...open, ...rd.parkedList()])); } catch { /* best effort */ }
 }
+rd.setParkedListener(persist);
 
 function snapshot(job) {
     if (!job) return null;
@@ -169,8 +181,21 @@ function ensureTicker() {
     if (ticker.unref) ticker.unref();
 }
 
+// Starts in progress, so two calls at once (the page mounting twice, a
+// double click) share one job instead of each adding the torrent, which
+// left the first one's torrent on the account with nothing to remove it.
+const starting = new Map(); // infoHash → Promise<snapshot>
+
 /** Start (or rejoin) the download job for a release. → snapshot */
-async function start({ infoHash, title, token }) {
+function start(args) {
+    const hash = String((args && args.infoHash) || '').toLowerCase();
+    if (starting.has(hash)) return starting.get(hash);
+    const p = startOnce(args).finally(() => starting.delete(hash));
+    starting.set(hash, p);
+    return p;
+}
+
+async function startOnce({ infoHash, title, token }) {
     const hash = String(infoHash || '').toLowerCase();
     if (!token || !/^[a-f0-9]{40}$/.test(hash)) return { state: 'error', message: 'Real-Debrid is not set up' };
     const existing = jobs.get(hash);
@@ -232,11 +257,12 @@ async function cancel(infoHash) {
     return snapshot(job);
 }
 
-/** Remove torrents a previous run's jobs left on the account. */
+/** Remove torrents a previous run's jobs (or parked checks) left on the account. */
 async function cleanupLeftovers(token) {
-    let list = [];
-    try { list = JSON.parse(fs.readFileSync(JOBS_FILE, 'utf8')); } catch { return; }
-    if (!token || !Array.isArray(list) || !list.length) return;
+    // What the previous run left, read once at startup: by the time this
+    // runs, the file may already list this run's own parked torrents.
+    const list = leftoversAtStart.splice(0);
+    if (!token || !list.length) return;
     for (const { hash, torrentId } of list) {
         if (jobs.has(hash)) continue;
         const info = await rdFetch(token, 'GET', `/torrents/info/${torrentId}`).catch(() => null);

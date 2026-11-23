@@ -533,16 +533,25 @@ async function checkCached({ infoHash, title, token, budgetMs = 7000 }) {
 
 const PARK_MS = 3 * 60 * 1000;
 const parked = new Map(); // `${token8}:${hash}` → { torrentId, timer }
+// inc/rdJobs.js saves parked torrents with its jobs, so an addon stopped
+// before a park ran out (Stremio closed) removes them on its next start.
+let parkedListener = null;
+const setParkedListener = (fn) => { parkedListener = fn; };
+const parkedChanged = () => { if (parkedListener) { try { parkedListener(); } catch { /* best effort */ } } };
+const parkedList = () => [...parked.entries()].map(([key, p]) => ({ hash: key.split(':')[1], torrentId: p.torrentId }));
+
 function park(token, normalized, torrentId) {
     const key = `${token.slice(0, 8)}:${normalized}`;
     const prev = parked.get(key);
     if (prev) clearTimeout(prev.timer);
     const timer = setTimeout(() => {
         parked.delete(key);
+        parkedChanged();
         deleteTorrent(token, normalized, torrentId).catch(() => { /* gone already */ });
     }, PARK_MS);
     if (timer.unref) timer.unref();
     parked.set(key, { torrentId, timer });
+    parkedChanged();
 }
 
 /** A download job taking over a torrent a cache check parked → its id, or null. */
@@ -552,6 +561,7 @@ function adoptParked(token, h) {
     if (!p) return null;
     clearTimeout(p.timer);
     parked.delete(key);
+    parkedChanged();
     return p.torrentId;
 }
 
@@ -585,6 +595,6 @@ function _setRdFetch(fn) {
 module.exports = {
     handleResolve, handleFiles, handleResolveUrl, resolveWithRD, checkCached, abandonIfNotReady, _setRdFetch,
     // For inc/rdJobs.js (download jobs).
-    protectHash, unprotectHash, isProtected, seenDownloading, markDownloaded, adoptParked,
+    protectHash, unprotectHash, isProtected, seenDownloading, markDownloaded, adoptParked, setParkedListener, parkedList,
     _rd: { rdFetch, magnetFor, pickLargestVideoIdx, deleteTorrent },
 };
