@@ -664,7 +664,13 @@ async function speechToEnd(mediaUrl, from, duration, token) {
  * credits start, or the end of the scene still playing or talking under
  * them, or of a scene after the roll. Null when the picture gave no tail.
  */
-async function findStoryEnd(mediaUrl, duration, found, token, { playedUrl = null, reference = null } = {}) {
+// A stand-in this close in length to the file played is the same cut (two
+// WEB releases of Ted Lasso S04E01: 2492.49 s and 2492.5 s), so its story
+// end holds for the played file even when the audio match at the end fails
+// (it did there, and auto-next stayed off on that file).
+const SAME_LENGTH_SECONDS = 1;
+
+async function findStoryEnd(mediaUrl, duration, found, token, { playedUrl = null, reference = null, sameLength = false } = {}) {
     if (!found || !found.run || !found.tail || found.tail.frames.length === 0) return null;
     const { run, tail } = found;
     const speech = await speechToEnd(mediaUrl, Math.max(0, Math.floor(run.start - SPEECH_BEFORE)), duration, token);
@@ -697,7 +703,7 @@ async function findStoryEnd(mediaUrl, duration, found, token, { playedUrl = null
         roll: story.roll,
         logos: story.logos,
         scene: story.scene,
-        heard: speech !== null && (!playedUrl || offset !== null),
+        heard: speech !== null && (!playedUrl || offset !== null || sameLength),
         offset,
     };
 }
@@ -796,7 +802,12 @@ async function findCredits(job, mediaUrl, duration, token, evidence, refresh, op
             evidence.creditsPicture = { run: found.run, device: found.device };
             // Where the story really ends: names often run over the last
             // scene while it still plays.
-            const story = await findStoryEnd(mediaUrl, duration, found, token, { playedUrl: options && options.playedUrl, reference: played });
+            const playedDuration = options && options.playedDuration;
+            const story = await findStoryEnd(mediaUrl, duration, found, token, {
+                playedUrl: options && options.playedUrl,
+                reference: played,
+                sameLength: Number.isFinite(playedDuration) && Math.abs(playedDuration - duration) <= SAME_LENGTH_SECONDS,
+            });
             if (story) evidence.creditsPicture.story = story;
             // Only a look that could see credits over footage counts as a miss.
             if (found.run || found.device) {
@@ -1010,7 +1021,7 @@ async function run(job, token) {
                 evidence.creditsStandIn = true;
                 creditsSearch = async () => {
                     const info = await fetchChapters(standIn.url);
-                    if (info && info.duration) await findCredits({ ...job, stream: standIn }, standIn.url, info.duration, token, evidence, refresh, { picture: true, playedUrl });
+                    if (info && info.duration) await findCredits({ ...job, stream: standIn }, standIn.url, info.duration, token, evidence, refresh, { picture: true, playedUrl, playedDuration: job.duration });
                 };
             }
         }

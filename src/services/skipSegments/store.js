@@ -80,7 +80,10 @@ async function addCreditsLength(metaId, season, sample) {
 // ends, by speech and the picture after the credits). One from an older search is
 // shown but looked at again: the old one skipped seasons without an intro
 // and credits over footage, and called those files done.
-const CREDITS_SEARCH = 3;
+// 4: a stand-in the same length as the played file counts as lined up, so its
+// story end can be advanced on. Only search-3 results whose story end was
+// "seen" (auto-next off) are looked at again; the rest are still current.
+const CREDITS_SEARCH = 4;
 // The intro search likewise: before 2, two episodes with a cut-down title
 // sequence switched the search off for the whole season, theme or not, so
 // a result without an intro from then is looked at again.
@@ -89,7 +92,9 @@ async function getResult(videoId, fileKey) {
     const result = await get(`res${ALGORITHM}|${videoId}|${fileKey}`);
     if (!result || Date.now() - result.at >= RESULT_MAX_AGE_MS) return null;
     const introStale = result.intro !== INTRO_SEARCH && !result.segments.some((segment) => segment.type === 'intro');
-    return result.credits === CREDITS_SEARCH && !introStale ? result : { ...result, complete: false };
+    const seen = result.segments.some((segment) => segment.type === 'credits' && segment.story === 'seen');
+    const creditsCurrent = result.credits === CREDITS_SEARCH || (result.credits === 3 && !seen);
+    return creditsCurrent && !introStale ? result : { ...result, complete: false };
 }
 const setResult = (videoId, fileKey, result) => set(`res${ALGORITHM}|${videoId}|${fileKey}`, { ...result, credits: CREDITS_SEARCH, intro: INTRO_SEARCH, at: Date.now() });
 
