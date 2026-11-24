@@ -659,17 +659,34 @@ async function speechToEnd(mediaUrl, from, duration, token) {
     return segments;
 }
 
+// The audio match at the story end fails when that moment is quiet: Ted
+// Lasso S04E01 ends on a silent montage (39:55), so auto-next stayed off on
+// its 4K file. When the stand-in is this close in length to the file played
+// (same cut: measured 0.00–0.04 s apart on six shows), other points of the
+// stand-in's end fingerprint are matched instead, and one that lines up
+// within SAME_CUT_OFFSET confirms where the end sits. Releases of different
+// lengths are other edits, where an offset found elsewhere need not hold.
+const SAME_LENGTH_SECONDS = 1;
+const SAME_CUT_OFFSET = 1;
+const ALIGN_PROBES = 3;
+
+// Points to match in the stand-in's end fingerprint, other than `tried`:
+// near its end (credits music), its middle and its start.
+function alignProbes(reference, tried) {
+    const from = (reference.from || 0) + 10;
+    const to = (reference.to || from) - (ALIGN_SECONDS - 10);
+    if (!(to > from)) return [];
+    return [to, (from + to) / 2, from]
+        .map((at) => Math.round(at))
+        .filter((at) => Math.abs(at - tried) >= ALIGN_SECONDS / 2)
+        .slice(0, ALIGN_PROBES);
+}
+
 /**
  * Where the story ends after credits seen in the picture (storyEnd): the
  * credits start, or the end of the scene still playing or talking under
  * them, or of a scene after the roll. Null when the picture gave no tail.
  */
-// A stand-in this close in length to the file played is the same cut (two
-// WEB releases of Ted Lasso S04E01: 2492.49 s and 2492.5 s), so its story
-// end holds for the played file even when the audio match at the end fails
-// (it did there, and auto-next stayed off on that file).
-const SAME_LENGTH_SECONDS = 1;
-
 async function findStoryEnd(mediaUrl, duration, found, token, { playedUrl = null, reference = null, sameLength = false } = {}) {
     if (!found || !found.run || !found.tail || found.tail.frames.length === 0) return null;
     const { run, tail } = found;
@@ -688,12 +705,36 @@ async function findStoryEnd(mediaUrl, duration, found, token, { playedUrl = null
     // can be cut a few seconds apart; without the match the end is offered
     // but not advanced on.
     let offset = null;
+    let alignedAt = null;
     if (playedUrl && reference) {
-        offset = await offsetOnPlayedFile(playedUrl, reference, end, token).catch((error) => {
-            if (error instanceof Cancelled) throw error;
+        // A failed read of the played (heavy, debrid) file is tried once more:
+        // on its own it looked the same as audio that doesn't line up, and
+        // that alone kept auto-next off (Ted Lasso S04E01: the same match on
+        // another 4K release lines up at 0.00 s, 0% bit errors).
+        const tryAt = async (at) => {
+            for (let attempt = 0; attempt < 2; attempt++) {
+                try {
+                    const measured = await offsetOnPlayedFile(playedUrl, reference, at, token);
+                    check(token);
+                    return measured;
+                } catch (error) {
+                    if (error instanceof Cancelled) throw error;
+                }
+            }
             return null;
-        });
-        check(token);
+        };
+        offset = await tryAt(end);
+        if (offset !== null) alignedAt = end;
+        if (offset === null && sameLength) {
+            for (const at of alignProbes(reference, end)) {
+                const measured = await tryAt(at);
+                if (measured !== null && Math.abs(measured) <= SAME_CUT_OFFSET) {
+                    offset = measured;
+                    alignedAt = at;
+                    break;
+                }
+            }
+        }
     }
     return {
         end,
@@ -703,8 +744,9 @@ async function findStoryEnd(mediaUrl, duration, found, token, { playedUrl = null
         roll: story.roll,
         logos: story.logos,
         scene: story.scene,
-        heard: speech !== null && (!playedUrl || offset !== null || sameLength),
+        heard: speech !== null && (!playedUrl || offset !== null),
         offset,
+        alignedAt,
     };
 }
 // Seasons where the picture showed nothing this many times are not read for
@@ -1175,4 +1217,5 @@ module.exports = {
     getResult,
     prepare,
     isBusy,
+    _alignProbes: alignProbes,
 };

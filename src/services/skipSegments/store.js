@@ -80,9 +80,11 @@ async function addCreditsLength(metaId, season, sample) {
 // ends, by speech and the picture after the credits). One from an older search is
 // shown but looked at again: the old one skipped seasons without an intro
 // and credits over footage, and called those files done.
-// 4: a stand-in the same length as the played file counts as lined up, so its
-// story end can be advanced on. Only search-3 results whose story end was
-// "seen" (auto-next off) are looked at again; the rest are still current.
+// 4: when the audio match at the story end fails (a quiet ending), a stand-in
+// the same length as the played file is matched at other points of its end,
+// and one that lines up confirms the end, so it can be advanced on. Only
+// search-3 results whose story end was "seen" (auto-next off) are looked at
+// again; the rest are still current.
 const CREDITS_SEARCH = 4;
 // The intro search likewise: before 2, two episodes with a cut-down title
 // sequence switched the search off for the whole season, theme or not, so
